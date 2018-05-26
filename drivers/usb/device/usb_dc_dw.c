@@ -14,13 +14,16 @@
  * level control routines to deal directly with the hardware.
  */
 
-#include <soc.h>
 #include <string.h>
 #include <stdio.h>
 #include <misc/byteorder.h>
 #include <usb/usb_dc.h>
+#include <usb/usb_device.h>
 #include "usb_dw_registers.h"
+#include <soc.h>
+#ifdef CONFIG_QMSI
 #include "clk.h"
+#endif
 
 #define SYS_LOG_LEVEL CONFIG_SYS_LOG_USB_DRIVER_LEVEL
 #include <logging/sys_log.h>
@@ -40,6 +43,8 @@
  */
 struct usb_ep_ctrl_prv {
 	u8_t ep_ena;
+	u8_t fifo_num;
+	u32_t fifo_size;
 	u16_t mps;         /* Max ep pkt size */
 	usb_dc_ep_callback cb;/* Endpoint callback function */
 	u32_t data_len;
@@ -52,6 +57,7 @@ struct usb_dw_ctrl_prv {
 	usb_dc_status_callback status_cb;
 	struct usb_ep_ctrl_prv in_ep_ctrl[USB_DW_IN_EP_NUM];
 	struct usb_ep_ctrl_prv out_ep_ctrl[USB_DW_OUT_EP_NUM];
+	int n_tx_fifos;
 	u8_t attached;
 };
 
@@ -212,6 +218,75 @@ static void usb_dw_clock_disable(void)
 #endif
 }
 
+static int usb_dw_num_dev_eps(void)
+{
+	return (USB_DW->ghwcfg2 >> 10) & 0xf;
+}
+
+static void usb_dw_flush_tx_fifo(int ep)
+{
+	int fnum = usb_dw_ctrl.in_ep_ctrl[ep].fifo_num;
+
+	USB_DW->grstctl = (fnum << 6) | (1<<5);
+	while (USB_DW->grstctl & (1<<5))
+		;
+}
+
+static int usb_dw_tx_fifo_avail(int ep)
+{
+	return USB_DW->in_ep_reg[ep].dtxfsts &
+		USB_DW_DTXFSTS_TXF_SPC_AVAIL_MASK;
+}
+
+/* Choose a FIFO number for an IN endpoint */
+static int usb_dw_set_fifo(u8_t ep)
+{
+	int ep_idx = USB_DW_EP_ADDR2IDX(ep);
+	volatile u32_t *reg = &USB_DW->in_ep_reg[ep_idx].diepctl;
+	u32_t val;
+	int fifo = 0;
+	int ded_fifo = !!(USB_DW->ghwcfg4 & USB_DW_HWCFG4_DEDFIFOMODE);
+
+	if (!ded_fifo) {
+		/* No support for shared-FIFO mode yet, existing
+		 * Zephyr hardware doesn't use it
+		 */
+		return -ENOTSUP;
+	}
+
+	/* In dedicated-FIFO mode, all IN endpoints must have a unique
+	 * FIFO number associated with them in the TXFNUM field of
+	 * DIEPCTLx, with EP0 always being assigned to FIFO zero (the
+	 * reset default, so we don't touch it).
+	 *
+	 * FIXME: would be better (c.f. the dwc2 driver in Linux) to
+	 * choose a FIFO based on the hardware depth: we want the
+	 * smallest one that fits our configured maximum packet size
+	 * for the endpoint.  This just picks the next available one.
+	 */
+	if (ep_idx != 0) {
+		fifo = ++usb_dw_ctrl.n_tx_fifos;
+
+		if (fifo >= usb_dw_num_dev_eps()) {
+			return -EINVAL;
+		}
+
+		reg = &USB_DW->in_ep_reg[ep_idx].diepctl;
+		val = *reg & ~USB_DW_DEPCTL_TXFNUM_MASK;
+		val |= fifo << USB_DW_DEPCTL_TXFNUM_OFFSET;
+		*reg = val;
+	}
+
+	usb_dw_ctrl.in_ep_ctrl[ep_idx].fifo_num = fifo;
+
+	usb_dw_flush_tx_fifo(ep_idx);
+
+	val = usb_dw_tx_fifo_avail(ep_idx);
+	usb_dw_ctrl.in_ep_ctrl[ep_idx].fifo_size = val;
+
+	return 0;
+}
+
 static int usb_dw_ep_set(u8_t ep,
 	u32_t ep_mps, enum usb_dc_ep_type ep_type)
 {
@@ -286,6 +361,14 @@ static int usb_dw_ep_set(u8_t ep,
 		*p_depctl |= USB_DW_DEPCTL_SETDOPID;
 	}
 
+	if (USB_DW_EP_ADDR2DIR(ep) == USB_EP_DIR_IN) {
+		int ret = usb_dw_set_fifo(ep);
+
+		if (ret) {
+			return ret;
+		}
+	}
+
 	return 0;
 }
 
@@ -320,15 +403,31 @@ static int usb_dw_tx(u8_t ep, const u8_t *const data,
 	unsigned int key;
 	u32_t i;
 
-	/* Check if FIFO space available */
-	avail_space = USB_DW->in_ep_reg[ep_idx].dtxfsts &
-		USB_DW_DTXFSTS_TXF_SPC_AVAIL_MASK;
+	/* Wait for FIFO space available */
+	do {
+		avail_space = usb_dw_tx_fifo_avail(ep_idx);
+		if (avail_space == usb_dw_ctrl.in_ep_ctrl[ep_idx].fifo_size) {
+			break;
+		}
+		/* Make sure we don't hog the CPU */
+		k_yield();
+	} while (1);
+
+	key = irq_lock();
+
 	avail_space *= 4;
 	if (!avail_space) {
 		SYS_LOG_ERR("USB IN EP%d no space available, DTXFSTS %x",
 		    ep_idx, USB_DW->in_ep_reg[ep_idx].dtxfsts);
+		irq_unlock(key);
 		return -EAGAIN;
 	}
+
+	/* For now tx-fifo sizes are not configured (cf usb_dw_set_fifo). Here
+	 * we force available fifo size to be a multiple of ep mps in order to
+	 * prevent splitting data incorrectly.
+	 */
+	avail_space -= avail_space % ep_mps;
 
 	if (data_len > avail_space) {
 		data_len = avail_space;
@@ -383,9 +482,9 @@ static int usb_dw_tx(u8_t ep, const u8_t *const data,
 	USB_DW->in_ep_reg[ep_idx].dieptsiz =
 	    (pkt_cnt << USB_DW_DEPTSIZ_PKT_CNT_OFFSET) | data_len;
 
-    /* Clear NAK and enable ep */
-	USB_DW->in_ep_reg[ep_idx].diepctl |= USB_DW_DEPCTL_CNAK;
-	USB_DW->in_ep_reg[ep_idx].diepctl |= USB_DW_DEPCTL_EP_ENA;
+	/* Clear NAK and enable ep */
+	USB_DW->in_ep_reg[ep_idx].diepctl |= (USB_DW_DEPCTL_EP_ENA |
+					      USB_DW_DEPCTL_CNAK);
 
 	/*
 	 * Write data to FIFO, make sure that we are protected against
@@ -396,13 +495,23 @@ static int usb_dw_tx(u8_t ep, const u8_t *const data,
 	 * to access a FIFO, the application must complete the transaction
 	 * before accessing the register."
 	 */
-	key = irq_lock();
 	for (i = 0; i < data_len; i += 4) {
-		USB_DW_EP_FIFO(ep_idx) = *(u32_t *)(data + i);
+		u32_t val = data[i];
+
+		if (i + 1 < data_len) {
+			val |= ((u32_t)data[i+1]) << 8;
+		}
+		if (i + 2 < data_len) {
+			val |= ((u32_t)data[i+2]) << 16;
+		}
+		if (i + 3 < data_len) {
+			val |= ((u32_t)data[i+3]) << 24;
+		}
+		USB_DW_EP_FIFO(ep_idx) = val;
 	}
 	irq_unlock(key);
 
-	SYS_LOG_DBG("USB IN EP%d write %x bytes", ep_idx, data_len);
+	SYS_LOG_DBG("USB IN EP%d write %u bytes", ep_idx, data_len);
 
 	return data_len;
 }
@@ -418,9 +527,12 @@ static int usb_dw_init(void)
 	}
 
 	/* Set device speed to FS */
+#ifdef USB_PHY_2
+	USB_DW->dcfg &= ~USB_DW_DCFG_DEV_SPD_FS;
+	USB_DW->dcfg |= 0x01;
+#else
 	USB_DW->dcfg |= USB_DW_DCFG_DEV_SPD_FS;
-
-	/* No FIFO setup needed, the default values are used */
+#endif
 
 	/* Set NAK for all OUT EPs */
 	for (ep = 0; ep < USB_DW_OUT_EP_NUM; ep++) {
@@ -452,7 +564,7 @@ static void usb_dw_handle_reset(void)
 
 	/* Inform upper layers */
 	if (usb_dw_ctrl.status_cb) {
-		usb_dw_ctrl.status_cb(USB_DC_RESET);
+		usb_dw_ctrl.status_cb(USB_DC_RESET, NULL);
 	}
 
 	/* Clear device address during reset. */
@@ -476,7 +588,7 @@ static void usb_dw_handle_enum_done(void)
 
 	/* Inform upper layers */
 	if (usb_dw_ctrl.status_cb) {
-		usb_dw_ctrl.status_cb(USB_DC_CONNECTED);
+		usb_dw_ctrl.status_cb(USB_DC_CONNECTED, NULL);
 	}
 }
 
@@ -513,7 +625,7 @@ static void usb_dw_isr_handler(void)
 			USB_DW->gintsts = USB_DW_GINTSTS_USB_SUSP;
 
 			if (usb_dw_ctrl.status_cb) {
-				usb_dw_ctrl.status_cb(USB_DC_SUSPEND);
+				usb_dw_ctrl.status_cb(USB_DC_SUSPEND, NULL);
 			}
 		}
 
@@ -522,7 +634,7 @@ static void usb_dw_isr_handler(void)
 			USB_DW->gintsts = USB_DW_GINTSTS_WK_UP_INT;
 
 			if (usb_dw_ctrl.status_cb) {
-				usb_dw_ctrl.status_cb(USB_DC_RESUME);
+				usb_dw_ctrl.status_cb(USB_DC_RESUME, NULL);
 			}
 		}
 
@@ -833,8 +945,9 @@ int usb_dc_ep_enable(const u8_t ep)
 		usb_dw_ctrl.in_ep_ctrl[ep_idx].ep_ena = 1;
 	}
 
-	if (USB_DW_EP_ADDR2DIR(ep) == USB_EP_DIR_OUT) {
-		/* Prepare EP for  rx */
+	if (USB_DW_EP_ADDR2DIR(ep) == USB_EP_DIR_OUT &&
+		usb_dw_ctrl.out_ep_ctrl[ep_idx].cb != usb_transfer_ep_callback) {
+		/* Start reading now, except for transfer managed eps */
 		usb_dw_prep_rx(ep, 0);
 	}
 
@@ -1075,4 +1188,15 @@ int usb_dc_set_status_callback(const usb_dc_status_callback cb)
 	usb_dw_ctrl.status_cb = cb;
 
 	return 0;
+}
+
+int usb_dc_ep_mps(const u8_t ep)
+{
+	enum usb_dw_out_ep_idx ep_idx = USB_DW_EP_ADDR2IDX(ep);
+
+	if (USB_DW_EP_ADDR2DIR(ep) == USB_EP_DIR_OUT) {
+		return usb_dw_ctrl.out_ep_ctrl[ep_idx].mps;
+	} else {
+		return usb_dw_ctrl.in_ep_ctrl[ep_idx].mps;
+	}
 }

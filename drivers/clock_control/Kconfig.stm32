@@ -1,6 +1,7 @@
 # Kconfig - STM32 MCU clock control driver config
 #
 # Copyright (c) 2017 Linaro
+# Copyright (c) 2017 RnDity Sp. z o.o.
 #
 #  SPDX-License-Identifier: Apache-2.0
 #
@@ -11,7 +12,7 @@ menuconfig CLOCK_CONTROL_STM32_CUBE
 	bool
 	prompt "STM32 Reset & Clock Control"
 	depends on CLOCK_CONTROL
-	default n if SOC_SERIES_STM32
+	select USE_STM32_LL_UTILS
 	help
 	  Enable driver for Reset & Clock Control subsystem found
 	  in STM32 family of MCUs
@@ -28,9 +29,8 @@ config CLOCK_CONTROL_STM32_DEVICE_INIT_PRIORITY
 	  is initialized earlier in the startup cycle. If unsure, leave
 	  at default value 1
 
-choice
+choice CLOCK_STM32_SYSCLK_SRC
 prompt "STM32 System Clock Source"
-default CLOCK_STM32_SYSCLK_SRC_PLL
 
 config CLOCK_STM32_SYSCLK_SRC_HSE
 	bool "HSE"
@@ -42,22 +42,30 @@ config CLOCK_STM32_SYSCLK_SRC_HSI
 	help
 	  Use HSI as source of SYSCLK
 
+config CLOCK_STM32_SYSCLK_SRC_MSI
+	bool "MSI"
+	depends on SOC_SERIES_STM32L0X || SOC_SERIES_STM32L4X
+	help
+	  Use MSI as source of SYSCLK
+
 config CLOCK_STM32_SYSCLK_SRC_PLL
 	bool "PLL"
 	help
 	  Use PLL as source of SYSCLK
 
-endchoice
+endchoice #CLOCK_STM32_SYSCLK_SRC
 
 config CLOCK_STM32_HSE_BYPASS
 	bool "HSE bypass"
 	depends on CLOCK_STM32_SYSCLK_SRC_HSE || CLOCK_STM32_PLL_SRC_HSE
+	default n
 	help
 	  Enable this option to bypass external high-speed clock (HSE).
 
 config CLOCK_STM32_HSE_CLOCK
 	int "HSE clock value"
 	depends on CLOCK_STM32_SYSCLK_SRC_HSE || CLOCK_STM32_PLL_SRC_HSE
+	default 8000000
 	help
 	  Value of external high-speed clock (HSE).
 
@@ -68,6 +76,7 @@ default CLOCK_STM32_PLL_SRC_HSI
 
 config CLOCK_STM32_PLL_SRC_MSI
 	bool "MSI"
+	depends on SOC_SERIES_STM32L0X || SOC_SERIES_STM32L4X
 	help
 	  Use MSI as source of PLL
 
@@ -89,6 +98,38 @@ config CLOCK_STM32_PLL_SRC_PLL2
 	 PLL2 as source PREDIV1SCR. If not selected, default source is HSE.
 
 endchoice
+
+if SOC_SERIES_STM32F0X
+
+config CLOCK_STM32_PLL_PREDIV
+	int "PREDIV Prescaler"
+	default 1
+	range 1 16
+	help
+	 PREDIV is PLLSCR clock signal prescaler, allowed values: 1 - 16.
+
+config CLOCK_STM32_PLL_PREDIV1
+	int "PREDIV1 Prescaler"
+	depends on CLOCK_STM32_PLL_SRC_HSE
+	default 1
+	range 1 16
+	help
+	 PREDIV is PLLSCR clock signal prescaler, present on STM32F0 SoC having
+	 an HSE Oscillator available like the stm32f04xx, stm32f07xx,
+	 stm32f09xx and stm32f030xc parts. If configured on a non supported
+	 part, the HSI oscillator will be used a default PLL source and this
+	 config will be ignored.
+	 Allowed values: 1 - 16.
+
+config CLOCK_STM32_PLL_MULTIPLIER
+	int "PLL multiplier"
+	depends on CLOCK_STM32_SYSCLK_SRC_PLL
+	default 6
+	range 2 16
+	help
+	 PLL multiplier, allowed values: 2-16. PLL output must not exceed 48MHz.
+
+endif # SOC_SERIES_STM32F0X
 
 if SOC_SERIES_STM32F1X
 
@@ -143,15 +184,6 @@ config CLOCK_STM32_PLL_PREDIV
 	range 1 16
 	help
 	 PREDIV is PLLSCR clock signal prescaler, allowed values: 1 - 16.
-
-config CLOCK_STM32_PLL_PREDIV1
-	int "PREDIV1 Prescaler"
-	depends on CLOCK_STM32_PLL_SRC_HSE && (SOC_STM32F302XE || SOC_STM32F303XE || SOC_STM32F398XX)
-	default 1
-	range 1 16
-	help
-	 PREDIV is PLLSCR clock signal prescaler, present on STM32F302xE, STM32F303xE and STM32F39xx SoCs.
-	 Allowed values: 1 - 16.
 
 config CLOCK_STM32_PLL_MULTIPLIER
 	int "PLL multiplier"
@@ -208,6 +240,27 @@ config CLOCK_STM32_PLL_Q_DIVISOR
 	 Allowed values: 2-15
 
 endif # SOC_SERIES_STM32F4X
+
+if SOC_SERIES_STM32L0X
+
+config CLOCK_STM32_PLL_MULTIPLIER
+	int "PLL multiplier"
+	depends on CLOCK_STM32_SYSCLK_SRC_PLL
+	default 4
+	range 3 48
+	help
+	 PLL multiplier, allowed values: 3, 4, 6, 8, 12, 16, 24, 32, 48.
+	 PLL output must not exceed 96MHz(1.8V)/48MHz(1.5V)/24MHz(1.2V).
+
+config CLOCK_STM32_PLL_DIVISOR
+	int "PLL divisor"
+	depends on CLOCK_STM32_SYSCLK_SRC_PLL
+	default 2
+	range 2 4
+	help
+	  PLL divisor, allowed values: 2-4.
+
+endif # SOC_SERIES_STM32L0X
 
 if SOC_SERIES_STM32L4X
 
@@ -271,6 +324,8 @@ config CLOCK_STM32_APB1_PRESCALER
 	  APB1 Low speed clock (PCLK1) prescaler, allowed values:
 	  1, 2, 4, 8, 16
 
+if SOC_SERIES_STM32F0X!=y
+
 config CLOCK_STM32_APB2_PRESCALER
 	int "APB2 prescaler"
 	default 1
@@ -278,6 +333,8 @@ config CLOCK_STM32_APB2_PRESCALER
 	help
 	  APB2 High speed clock (PCLK2) prescaler, allowed values:
 	  1, 2, 4, 8, 16
+
+endif # SOC_SERIES_STM32F0X!=y
 
 endif # CLOCK_CONTROL_STM32_CUBE
 endif # SOC_FAMILY_STM32

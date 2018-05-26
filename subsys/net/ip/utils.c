@@ -683,6 +683,15 @@ bool net_ipaddr_parse(const char *str, size_t str_len, struct sockaddr *addr)
 {
 	int i, count;
 
+	if (!str || str_len == 0) {
+		return false;
+	}
+
+	/* We cannot accept empty string here */
+	if (*str == '\0') {
+		return false;
+	}
+
 	if (*str == '[') {
 #if defined(CONFIG_NET_IPV6)
 		return parse_ipv6(str, str_len, addr, true);
@@ -720,4 +729,28 @@ bool net_ipaddr_parse(const char *str, size_t str_len, struct sockaddr *addr)
 #if defined(CONFIG_NET_IPV6) && !defined(CONFIG_NET_IPV4)
 	return parse_ipv6(str, str_len, addr, false);
 #endif
+}
+
+int net_bytes_from_str(u8_t *buf, int buf_len, const char *src)
+{
+	unsigned int i;
+	char *endptr;
+
+	for (i = 0; i < strlen(src); i++) {
+		if (!(src[i] >= '0' && src[i] <= '9') &&
+		    !(src[i] >= 'A' && src[i] <= 'F') &&
+		    !(src[i] >= 'a' && src[i] <= 'f') &&
+		    src[i] != ':') {
+			return -EINVAL;
+		}
+	}
+
+	memset(buf, 0, buf_len);
+
+	for (i = 0; i < buf_len; i++) {
+		buf[i] = strtol(src, &endptr, 16);
+		src = ++endptr;
+	}
+
+	return 0;
 }

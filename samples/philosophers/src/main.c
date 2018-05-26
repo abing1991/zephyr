@@ -76,7 +76,9 @@
 #endif
 #endif
 
+#ifndef SAME_PRIO
 #define SAME_PRIO 0
+#endif
 
 /* end - control behaviour of the demo */
 /***************************************/
@@ -84,7 +86,7 @@
 #define STACK_SIZE 768
 
 /*
- * There are multiple tasks doing printfs and they may conflict.
+ * There are multiple threads doing printfs and they may conflict.
  * Therefore use puts() instead of printf().
  */
 #if defined(CONFIG_STDOUT_CONSOLE)
@@ -226,12 +228,21 @@ static void init_objects(void)
 
 static void start_threads(void)
 {
-	/* create two fibers (prios -2/-1) and four tasks: (prios 0-3) */
+	/*
+	 * create two coop. threads (prios -2/-1) and four preemptive threads
+	 * : (prios 0-3)
+	 */
 	for (int i = 0; i < NUM_PHIL; i++) {
 		int prio = new_prio(i);
 
 		k_thread_create(&threads[i], &stacks[i][0], STACK_SIZE,
-				philosopher, (void *)i, NULL, NULL, prio, 0, 0);
+				philosopher, (void *)i, NULL, NULL, prio,
+				K_USER, K_FOREVER);
+
+		k_object_access_grant(fork(i), &threads[i]);
+		k_object_access_grant(fork((i + 1) % NUM_PHIL), &threads[i]);
+
+		k_thread_start(&threads[i]);
 	}
 }
 
@@ -255,8 +266,9 @@ static void display_demo_description(void)
 void main(void)
 {
 	display_demo_description();
-
+#if CONFIG_TIMESLICING
 	k_sched_time_slice_set(5000, 0);
+#endif
 
 	init_objects();
 	start_threads();

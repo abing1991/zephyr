@@ -6,6 +6,9 @@
 
 #include <ztest.h>
 #include <stdio.h>
+#ifdef KERNEL
+__kernel static struct k_thread ztest_thread;
+#endif
 
 enum {
 	TEST_PHASE_SETUP,
@@ -23,6 +26,15 @@ static int cleanup_test(struct unit_test *test)
 	int mock_status;
 
 	mock_status = _cleanup_mock();
+
+#ifdef KERNEL
+	/* we need to remove the ztest_thread information from the timeout_q.
+	 * Because we reuse the same k_thread structure this would
+	 * causes some problems.
+	 */
+	k_thread_abort(&ztest_thread);
+#endif
+
 	if (!ret && mock_status == 1) {
 		PRINT("Test %s failed: Unused mock parameter values\n",
 		      test->name);
@@ -136,15 +148,11 @@ out:
 #define FAIL_FAST 0
 #endif
 
-#if CONFIG_ZTEST_STACKSIZE & (STACK_ALIGN - 1)
-    #error "CONFIG_ZTEST_STACKSIZE must be a multiple of the stack alignment"
-#endif
-static struct k_thread ztest_thread;
-static K_THREAD_STACK_DEFINE(thread_stack, CONFIG_ZTEST_STACKSIZE +
-			     CONFIG_TEST_EXTRA_STACKSIZE);
+K_THREAD_STACK_DEFINE(ztest_thread_stack, CONFIG_ZTEST_STACKSIZE +
+		      CONFIG_TEST_EXTRA_STACKSIZE);
 
 static int test_result;
-static struct k_sem test_end_signal;
+__kernel static struct k_sem test_end_signal;
 
 void ztest_test_fail(void)
 {
@@ -160,9 +168,17 @@ void ztest_test_pass(void)
 	k_thread_abort(k_current_get());
 }
 
+void ztest_test_skip(void)
+{
+	test_result = -2;
+	k_sem_give(&test_end_signal);
+	k_thread_abort(k_current_get());
+}
+
 static void init_testing(void)
 {
 	k_sem_init(&test_end_signal, 0, 1);
+	k_object_access_all_grant(&test_end_signal);
 }
 
 static void test_cb(void *a, void *dummy2, void *dummy)
@@ -184,11 +200,11 @@ static int run_test(struct unit_test *test)
 	int ret = TC_PASS;
 
 	TC_START(test->name);
-	k_thread_create(&ztest_thread, thread_stack,
-			K_THREAD_STACK_SIZEOF(thread_stack),
+	k_thread_create(&ztest_thread, ztest_thread_stack,
+			K_THREAD_STACK_SIZEOF(ztest_thread_stack),
 			(k_thread_entry_t) test_cb, (struct unit_test *)test,
-			NULL, NULL, -1, 0, 0);
-
+			NULL, NULL, -1, test->thread_options | K_INHERIT_PERMS,
+			0);
 	/*
 	 * There is an implicit expectation here that the thread that was
 	 * spawned is still higher priority than the current thread.
@@ -203,7 +219,7 @@ static int run_test(struct unit_test *test)
 	 * phase": this will corrupt the kernel ready queue.
 	 */
 	k_sem_take(&test_end_signal, K_FOREVER);
-	if (test_result) {
+	if (test_result == -1) {
 		ret = TC_FAIL;
 	}
 
@@ -211,7 +227,11 @@ static int run_test(struct unit_test *test)
 		ret |= cleanup_test(test);
 	}
 
-	_TC_END_RESULT(ret, test->name);
+	if (test_result == -2) {
+		_TC_END_RESULT(TC_SKIP, test->name);
+	} else {
+		_TC_END_RESULT(ret, test->name);
+	}
 
 	return ret;
 }
@@ -245,8 +265,6 @@ void _ztest_run_test_suite(const char *name, struct unit_test *suite)
 	}
 	test_status = (test_status || fail) ? 1 : 0;
 }
-
-void test_main(void);
 
 #ifndef KERNEL
 int main(void)

@@ -5,11 +5,12 @@
  */
 
 /* Include esp-idf headers first to avoid redefining BIT() macro */
-#include <rom/ets_sys.h>
 #include <soc/dport_reg.h>
 #include <soc/gpio_reg.h>
+#include <soc/io_mux_reg.h>
 #include <soc/soc.h>
 
+#include <soc.h>
 #include <errno.h>
 #include <device.h>
 #include <gpio.h>
@@ -117,6 +118,17 @@ static void config_polarity(u32_t pin, int flags)
 	}
 }
 
+static void config_drive_strength(u32_t pin, int flags)
+{
+	volatile u32_t *reg = gpio_pin_reg(pin);
+
+	if ((flags & GPIO_DS_DISCONNECT_LOW) == GPIO_DS_DISCONNECT_LOW) {
+		*reg |= GPIO_PIN_PAD_DRIVER;
+	} else {
+		*reg &= ~GPIO_PIN_PAD_DRIVER;
+	}
+}
+
 static int gpio_esp32_config(struct device *dev, int access_op,
 			     u32_t pin, int flags)
 {
@@ -134,7 +146,7 @@ static int gpio_esp32_config(struct device *dev, int access_op,
 		return r;
 	}
 
-	pinmux_pin_set(data->pinmux, pin, PINMUX_FUNC_A);
+	pinmux_pin_set(data->pinmux, pin, PIN_FUNC_GPIO);
 	if (flags & GPIO_PUD_PULL_UP) {
 		pinmux_pin_pullup(data->pinmux, pin, PINMUX_PULLUP_ENABLE);
 	} else if (flags & GPIO_PUD_PULL_DOWN) {
@@ -142,13 +154,16 @@ static int gpio_esp32_config(struct device *dev, int access_op,
 	}
 
 	if (flags & GPIO_DIR_OUT) {
-		pinmux_pin_input_enable(data->pinmux, pin,
+		r = pinmux_pin_input_enable(data->pinmux, pin,
 					PINMUX_OUTPUT_ENABLED);
+		assert(r >= 0);
 	} else {
 		pinmux_pin_input_enable(data->pinmux, pin,
 					PINMUX_INPUT_ENABLED);
 		config_polarity(pin, flags);
 	}
+
+	config_drive_strength(pin, flags);
 
 	return config_interrupt(pin, flags);
 }
@@ -258,8 +273,8 @@ static int gpio_esp32_init(struct device *device)
 		IRQ_CONNECT(CONFIG_GPIO_ESP32_IRQ, 1, gpio_esp32_isr,
 			    NULL, 0);
 
-		intr_matrix_set(0, ETS_GPIO_INTR_SOURCE,
-				CONFIG_GPIO_ESP32_IRQ);
+		esp32_rom_intr_matrix_set(0, ETS_GPIO_INTR_SOURCE,
+					  CONFIG_GPIO_ESP32_IRQ);
 
 		irq_enable(CONFIG_GPIO_ESP32_IRQ);
 
@@ -298,7 +313,7 @@ static struct gpio_esp32_data gpio_data_pins_0_to_31 = {
 #endif
 
 #if defined(CONFIG_GPIO_ESP32_1)
-static struct gpio_esp32_data gpio_data_pins_32_to_63 = {
+static struct gpio_esp32_data gpio_data_pins_32_to_39 = {
 	.port = {
 		.write = {
 			.set_reg = (u32_t *)GPIO_OUT1_W1TS_REG,
@@ -335,7 +350,7 @@ GPIO_DEVICE_INIT(CONFIG_GPIO_ESP32_0_NAME, 0_to_31);
 #endif
 
 #if defined(CONFIG_GPIO_ESP32_1)
-GPIO_DEVICE_INIT(CONFIG_GPIO_ESP32_1_NAME, 32_to_63);
+GPIO_DEVICE_INIT(CONFIG_GPIO_ESP32_1_NAME, 32_to_39);
 #endif
 
 static void gpio_esp32_isr(void *param)
@@ -344,7 +359,7 @@ static void gpio_esp32_isr(void *param)
 	gpio_esp32_fire_callbacks(DEVICE_GET(gpio_esp32_0_to_31));
 #endif
 #if defined(CONFIG_GPIO_ESP32_1)
-	gpio_esp32_fire_callbacks(DEVICE_GET(gpio_esp32_32_to_63));
+	gpio_esp32_fire_callbacks(DEVICE_GET(gpio_esp32_32_to_39));
 #endif
 
 	ARG_UNUSED(param);

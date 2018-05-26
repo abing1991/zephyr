@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Nordic Semiconductor ASA
+ * Copyright (c) 2016-2018 Nordic Semiconductor ASA
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -95,8 +95,8 @@ struct uart_nrf5_dev_data_t {
 	((volatile struct _uart *)(DEV_CFG(dev))->base)
 
 #define UART_IRQ_MASK_RX	(1 << 2)
-#define UART_IRQ_MASK_TX	(1 << 3)
-#define UART_IRQ_MASK_ERROR	(1 << 4)
+#define UART_IRQ_MASK_TX	(1 << 7)
+#define UART_IRQ_MASK_ERROR	(1 << 9)
 
 static const struct uart_driver_api uart_nrf5_driver_api;
 
@@ -122,58 +122,58 @@ static int baudrate_set(struct device *dev,
 	/* Use the common nRF5 macros */
 	switch (baudrate) {
 	case 300:
-		divisor = NRF5_UART_BAUDRATE_300;
+		divisor = NRF_UART_BAUDRATE_300;
 		break;
 	case 600:
-		divisor = NRF5_UART_BAUDRATE_600;
+		divisor = NRF_UART_BAUDRATE_600;
 		break;
 	case 1200:
-		divisor = NRF5_UART_BAUDRATE_1200;
+		divisor = NRF_UART_BAUDRATE_1200;
 		break;
 	case 2400:
-		divisor = NRF5_UART_BAUDRATE_2400;
+		divisor = NRF_UART_BAUDRATE_2400;
 		break;
 	case 4800:
-		divisor = NRF5_UART_BAUDRATE_4800;
+		divisor = NRF_UART_BAUDRATE_4800;
 		break;
 	case 9600:
-		divisor = NRF5_UART_BAUDRATE_9600;
+		divisor = NRF_UART_BAUDRATE_9600;
 		break;
 	case 14400:
-		divisor = NRF5_UART_BAUDRATE_14400;
+		divisor = NRF_UART_BAUDRATE_14400;
 		break;
 	case 19200:
-		divisor = NRF5_UART_BAUDRATE_19200;
+		divisor = NRF_UART_BAUDRATE_19200;
 		break;
 	case 28800:
-		divisor = NRF5_UART_BAUDRATE_28800;
+		divisor = NRF_UART_BAUDRATE_28800;
 		break;
 	case 38400:
-		divisor = NRF5_UART_BAUDRATE_38400;
+		divisor = NRF_UART_BAUDRATE_38400;
 		break;
 	case 57600:
-		divisor = NRF5_UART_BAUDRATE_57600;
+		divisor = NRF_UART_BAUDRATE_57600;
 		break;
 	case 76800:
-		divisor = NRF5_UART_BAUDRATE_76800;
+		divisor = NRF_UART_BAUDRATE_76800;
 		break;
 	case 115200:
-		divisor = NRF5_UART_BAUDRATE_115200;
+		divisor = NRF_UART_BAUDRATE_115200;
 		break;
 	case 230400:
-		divisor = NRF5_UART_BAUDRATE_230400;
+		divisor = NRF_UART_BAUDRATE_230400;
 		break;
 	case 250000:
-		divisor = NRF5_UART_BAUDRATE_250000;
+		divisor = NRF_UART_BAUDRATE_250000;
 		break;
 	case 460800:
-		divisor = NRF5_UART_BAUDRATE_460800;
+		divisor = NRF_UART_BAUDRATE_460800;
 		break;
 	case 921600:
-		divisor = NRF5_UART_BAUDRATE_921600;
+		divisor = NRF_UART_BAUDRATE_921600;
 		break;
 	case 1000000:
-		divisor = NRF5_UART_BAUDRATE_1000000;
+		divisor = NRF_UART_BAUDRATE_1000000;
 		break;
 	default:
 		return -EINVAL;
@@ -283,9 +283,6 @@ static int uart_nrf5_poll_in(struct device *dev, unsigned char *c)
 /**
  * @brief Output a character in polled mode.
  *
- * Checks if the transmitter is empty. If empty, a character is written to
- * the data register.
- *
  * @param dev UART device struct
  * @param c Character to send
  *
@@ -296,14 +293,26 @@ static unsigned char uart_nrf5_poll_out(struct device *dev,
 {
 	volatile struct _uart *uart = UART_STRUCT(dev);
 
+	/* The UART API dictates that poll_out should wait for the transmitter
+	 * to be empty before sending a character. However, without locking,
+	 * this introduces a rare yet possible race condition if the thread is
+	 * preempted between sending the byte and checking for completion.
+
+	 * Because of this race condition, the while loop has to be placed
+	 * after the write to TXD, and we can't wait for an empty transmitter
+	 * before writing. This is a trade-off between losing a byte once in a
+	 * blue moon against hanging up the whole thread permanently
+	 */
+
+	/* reset transmitter ready state */
+	uart->EVENTS_TXDRDY = 0;
+
 	/* send a character */
 	uart->TXD = (u8_t)c;
 
-	/* Wait for transmitter to be ready */
+	/* wait for transmitter to be ready */
 	while (!uart->EVENTS_TXDRDY) {
 	}
-
-	uart->EVENTS_TXDRDY = 0;
 
 	return c;
 }
@@ -438,7 +447,12 @@ static void uart_nrf5_irq_err_disable(struct device *dev)
 /** Interrupt driven pending status function */
 static int uart_nrf5_irq_is_pending(struct device *dev)
 {
-	return (uart_nrf5_irq_tx_ready(dev) || uart_nrf5_irq_rx_ready(dev));
+	volatile struct _uart *uart = UART_STRUCT(dev);
+
+	return ((uart->INTENSET & UART_IRQ_MASK_TX) &&
+		(uart_nrf5_irq_tx_ready(dev))) ||
+	       ((uart->INTENSET & UART_IRQ_MASK_RX) &&
+		(uart_nrf5_irq_rx_ready(dev)));
 }
 
 /** Interrupt driven interrupt update function */

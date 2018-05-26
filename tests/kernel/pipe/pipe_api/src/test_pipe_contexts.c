@@ -4,18 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/**
- * @addtogroup t_pipe_api
- * @{
- * @defgroup t_pipe_api_basic test_pipe_api_basic
- * @brief TestPurpose: verify zephyr pipe apis under different context
- * - API coverage
- *   -# k_pipe_init K_PIPE_DEFINE
- *   -# k_pipe_put
- *   -# k_pipe_get
- * @}
- */
-
 #include <ztest.h>
 
 #define STACK_SIZE 1024
@@ -27,11 +15,17 @@ K_MEM_POOL_DEFINE(mpool, BYTES_TO_WRITE, PIPE_LEN, 1, BYTES_TO_WRITE);
 static unsigned char __aligned(4) data[] = "abcd1234$%^&PIPE";
 /**TESTPOINT: init via K_PIPE_DEFINE*/
 K_PIPE_DEFINE(kpipe, PIPE_LEN, 4);
-static struct k_pipe pipe;
+__kernel struct k_pipe pipe;
 
-static K_THREAD_STACK_DEFINE(tstack, STACK_SIZE);
-static struct k_thread tdata;
-static struct k_sem end_sema;
+K_THREAD_STACK_DEFINE(tstack, STACK_SIZE);
+__kernel struct k_thread tdata;
+K_SEM_DEFINE(end_sema, 0, 1);
+
+/* By design, only two blocks. We should never need more than that, one
+ * to allocate the pipe object, one for its buffer. Both should be auto-
+ * released when the thread exits
+ */
+K_MEM_POOL_DEFINE(test_pool, 128, 128, 2, 4);
 
 static void tpipe_put(struct k_pipe *ppipe)
 {
@@ -100,12 +94,11 @@ static void tThread_block_put(void *p1, void *p2, void *p3)
 
 static void tpipe_thread_thread(struct k_pipe *ppipe)
 {
-	k_sem_init(&end_sema, 0, 1);
-
 	/**TESTPOINT: thread-thread data passing via pipe*/
 	k_tid_t tid = k_thread_create(&tdata, tstack, STACK_SIZE,
 				      tThread_entry, ppipe, NULL, NULL,
-				      K_PRIO_PREEMPT(0), 0, 0);
+				      K_PRIO_PREEMPT(0),
+				      K_INHERIT_PERMS | K_USER, 0);
 	tpipe_put(ppipe);
 	k_sem_take(&end_sema, K_FOREVER);
 
@@ -116,10 +109,19 @@ static void tpipe_thread_thread(struct k_pipe *ppipe)
 	k_thread_abort(tid);
 }
 
-/*test cases*/
+
+/**
+ * @addtogroup kernel_pipe_tests
+ * @{
+ */
+
+/**
+ * @see k_pipe_init(), k_pipe_put(), #K_PIPE_DEFINE(x)
+ */
 void test_pipe_thread2thread(void)
 {
 	/**TESTPOINT: test k_pipe_init pipe*/
+
 	k_pipe_init(&pipe, data, PIPE_LEN);
 	tpipe_thread_thread(&pipe);
 
@@ -127,6 +129,28 @@ void test_pipe_thread2thread(void)
 	tpipe_thread_thread(&kpipe);
 }
 
+#ifdef CONFIG_USERSPACE
+/**
+ * @see k_pipe_init(), k_pipe_put(), #K_PIPE_DEFINE(x)
+ */
+void test_pipe_user_thread2thread(void)
+{
+	/**TESTPOINT: test k_pipe_init pipe*/
+
+	struct k_pipe *p = k_object_alloc(K_OBJ_PIPE);
+
+	zassert_true(p != NULL, NULL);
+	zassert_false(k_pipe_alloc_init(p, PIPE_LEN), NULL);
+	tpipe_thread_thread(&pipe);
+
+	/**TESTPOINT: test K_PIPE_DEFINE pipe*/
+	tpipe_thread_thread(&kpipe);
+}
+#endif
+
+/**
+ * @see k_pipe_block_put()
+ */
 void test_pipe_block_put(void)
 {
 
@@ -142,6 +166,9 @@ void test_pipe_block_put(void)
 	k_thread_abort(tid);
 }
 
+/**
+ * @see k_pipe_block_put()
+ */
 void test_pipe_block_put_sema(void)
 {
 	struct k_sem sync_sema;
@@ -158,6 +185,9 @@ void test_pipe_block_put_sema(void)
 	k_thread_abort(tid);
 }
 
+/**
+ * @see k_pipe_put(), k_pipe_get()
+ */
 void test_pipe_get_put(void)
 {
 	/**TESTPOINT: test API sequence: [get, put]*/
@@ -172,3 +202,17 @@ void test_pipe_get_put(void)
 	k_thread_abort(tid);
 }
 
+#ifdef CONFIG_USERSPACE
+void test_resource_pool_auto_free(void)
+{
+	/* Pool has 2 blocks, both should succeed if kernel object and pipe
+	 * buffer are auto-freed when the allocating threads exit
+	 */
+	zassert_true(k_mem_pool_malloc(&test_pool, 64) != NULL, NULL);
+	zassert_true(k_mem_pool_malloc(&test_pool, 64) != NULL, NULL);
+}
+#endif
+
+/**
+ * @}
+ */

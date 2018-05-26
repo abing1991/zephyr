@@ -22,6 +22,7 @@
 #include <kernel.h>
 #include <net/net_pkt.h>
 #include <net/net_if.h>
+#include <net/ethernet.h>
 
 #include "fsl_enet.h"
 #include "fsl_phy.h"
@@ -59,6 +60,10 @@ static const char *phy_state_name(enum eth_mcux_phy_state state)
 }
 
 struct eth_context {
+	/* If VLAN is enabled, there can be multiple VLAN interfaces related to
+	 * this physical device. In that case, this pointer value is not really
+	 * used for anything.
+	 */
 	struct net_if *iface;
 	enet_handle_t enet_handle;
 	struct k_sem tx_buf_sem;
@@ -81,14 +86,17 @@ struct eth_context {
 	 * in Zephyr, and adding needed interface to MCUX (or
 	 * bypassing it and writing a more complex driver working
 	 * directly with hardware).
+	 *
+	 * Note that we do not copy FCS into this buffer thus the
+	 * size is 1514 bytes.
 	 */
-	u8_t frame_buf[1500];
+	u8_t frame_buf[1500 + 14]; /* Max MTU + ethernet header size */
 };
 
 static void eth_0_config_func(void);
 
 static enet_rx_bd_struct_t __aligned(ENET_BUFF_ALIGNMENT)
-rx_buffer_desc[CONFIG_ETH_MCUX_TX_BUFFERS];
+rx_buffer_desc[CONFIG_ETH_MCUX_RX_BUFFERS];
 
 static enet_tx_bd_struct_t __aligned(ENET_BUFF_ALIGNMENT)
 tx_buffer_desc[CONFIG_ETH_MCUX_TX_BUFFERS];
@@ -96,8 +104,16 @@ tx_buffer_desc[CONFIG_ETH_MCUX_TX_BUFFERS];
 /* Use ENET_FRAME_MAX_VALNFRAMELEN for VLAN frame size
  * Use ENET_FRAME_MAX_FRAMELEN for ethernet frame size
  */
+#if defined(CONFIG_NET_VLAN)
+#if !defined(ENET_FRAME_MAX_VALNFRAMELEN)
+#define ENET_FRAME_MAX_VALNFRAMELEN (ENET_FRAME_MAX_FRAMELEN + 4)
+#endif
+#define ETH_MCUX_BUFFER_SIZE \
+	ROUND_UP(ENET_FRAME_MAX_VALNFRAMELEN, ENET_BUFF_ALIGNMENT)
+#else
 #define ETH_MCUX_BUFFER_SIZE \
 	ROUND_UP(ENET_FRAME_MAX_FRAMELEN, ENET_BUFF_ALIGNMENT)
+#endif /* CONFIG_NET_VLAN */
 
 static u8_t __aligned(ENET_BUFF_ALIGNMENT)
 rx_buffer[CONFIG_ETH_MCUX_RX_BUFFERS][ETH_MCUX_BUFFER_SIZE];
@@ -127,6 +143,24 @@ static void eth_mcux_decode_duplex_and_speed(u32_t status,
 		*p_phy_speed = kPHY_Speed10M;
 		break;
 	}
+}
+
+static inline struct net_if *get_iface(struct eth_context *ctx, u16_t vlan_tag)
+{
+#if defined(CONFIG_NET_VLAN)
+	struct net_if *iface;
+
+	iface = net_eth_get_vlan_iface(ctx->iface, vlan_tag);
+	if (!iface) {
+		return ctx->iface;
+	}
+
+	return iface;
+#else
+	ARG_UNUSED(vlan_tag);
+
+	return ctx->iface;
+#endif
 }
 
 static void eth_mcux_phy_enter_reset(struct eth_context *context)
@@ -308,7 +342,7 @@ static void eth_mcux_delayed_phy_work(struct k_work *item)
 
 static int eth_tx(struct net_if *iface, struct net_pkt *pkt)
 {
-	struct eth_context *context = iface->dev->driver_data;
+	struct eth_context *context = net_if_get_device(iface)->driver_data;
 	const struct net_buf *frag;
 	u8_t *dst;
 	status_t status;
@@ -347,7 +381,7 @@ static int eth_tx(struct net_if *iface, struct net_pkt *pkt)
 	irq_unlock(imask);
 
 	if (status) {
-		SYS_LOG_ERR("ENET_SendFrame error: %d\n", status);
+		SYS_LOG_ERR("ENET_SendFrame error: %d", (int)status);
 		return -1;
 	}
 
@@ -364,13 +398,14 @@ static void eth_rx(struct device *iface)
 	u32_t frame_length = 0;
 	status_t status;
 	unsigned int imask;
+	u16_t vlan_tag = NET_VLAN_TAG_UNSPEC;
 
 	status = ENET_GetRxFrameSize(&context->enet_handle,
 				     (uint32_t *)&frame_length);
 	if (status) {
 		enet_data_error_stats_t error_stats;
 
-		SYS_LOG_ERR("ENET_GetRxFrameSize return: %d", status);
+		SYS_LOG_ERR("ENET_GetRxFrameSize return: %d", (int)status);
 
 		ENET_GetRxErrBeforeReadFrame(&context->enet_handle,
 					     &error_stats);
@@ -399,7 +434,7 @@ static void eth_rx(struct device *iface)
 	}
 
 	if (sizeof(context->frame_buf) < frame_length) {
-		SYS_LOG_ERR("frame too large (%d)\n", frame_length);
+		SYS_LOG_ERR("frame too large (%d)", frame_length);
 		net_pkt_unref(pkt);
 		status = ENET_ReadFrame(ENET, &context->enet_handle, NULL, 0);
 		assert(status == kStatus_Success);
@@ -415,7 +450,7 @@ static void eth_rx(struct device *iface)
 				context->frame_buf, frame_length);
 	if (status) {
 		irq_unlock(imask);
-		SYS_LOG_ERR("ENET_ReadFrame failed: %d\n", status);
+		SYS_LOG_ERR("ENET_ReadFrame failed: %d", (int)status);
 		net_pkt_unref(pkt);
 		return;
 	}
@@ -429,7 +464,7 @@ static void eth_rx(struct device *iface)
 		pkt_buf = net_pkt_get_frag(pkt, K_NO_WAIT);
 		if (!pkt_buf) {
 			irq_unlock(imask);
-			SYS_LOG_ERR("Failed to get fragment buf\n");
+			SYS_LOG_ERR("Failed to get fragment buf");
 			net_pkt_unref(pkt);
 			assert(status == kStatus_Success);
 			return;
@@ -454,9 +489,33 @@ static void eth_rx(struct device *iface)
 		frame_length -= frag_len;
 	} while (frame_length > 0);
 
+#if defined(CONFIG_NET_VLAN)
+	{
+		struct net_eth_hdr *hdr = NET_ETH_HDR(pkt);
+
+		if (ntohs(hdr->type) == NET_ETH_PTYPE_VLAN) {
+			struct net_eth_vlan_hdr *hdr_vlan =
+				(struct net_eth_vlan_hdr *)NET_ETH_HDR(pkt);
+
+			net_pkt_set_vlan_tci(pkt, ntohs(hdr_vlan->vlan.tci));
+			vlan_tag = net_pkt_vlan_tag(pkt);
+
+#if CONFIG_NET_TC_RX_COUNT > 1
+			{
+				enum net_priority prio;
+
+				prio = net_vlan2priority(
+						net_pkt_vlan_priority(pkt));
+				net_pkt_set_priority(pkt, prio);
+			}
+#endif
+		}
+	}
+#endif
+
 	irq_unlock(imask);
 
-	if (net_recv_data(context->iface, pkt) < 0) {
+	if (net_recv_data(get_iface(context, vlan_tag), pkt) < 0) {
 		net_pkt_unref(pkt);
 	}
 }
@@ -534,18 +593,15 @@ static int eth_0_init(struct device *dev)
 	enet_config.interrupt |= kENET_MiiInterrupt;
 
 #ifdef CONFIG_ETH_MCUX_PROMISCUOUS_MODE
-	/* FIXME: Workaround for lack of driver API support for multicast
-	 * management. So, instead we want to receive all multicast
-	 * frames "by default", or otherwise basic IPv6 features, like
-	 * address resolution, don't work. On Kinetis Ethernet controller,
-	 * that translates to enabling promiscuous mode. The real
-	 * fix depends on https://jira.zephyrproject.org/browse/ZEP-1673.
-	 */
 	enet_config.macSpecialConfig |= kENET_ControlPromiscuousEnable;
 #endif
 
 #if defined(CONFIG_ETH_MCUX_0_RANDOM_MAC)
 	generate_mac(context->mac_addr);
+#endif
+
+#if defined(CONFIG_NET_VLAN)
+	enet_config.macSpecialConfig |= kENET_ControlVLANTagEnable;
 #endif
 
 	ENET_Init(ENET,
@@ -570,20 +626,57 @@ static int eth_0_init(struct device *dev)
 	return 0;
 }
 
-static void eth_0_iface_init(struct net_if *iface)
+#if defined(CONFIG_NET_IPV6)
+static void net_if_mcast_cb(struct net_if *iface,
+			    const struct in6_addr *addr,
+			    bool is_joined)
+{
+	struct net_eth_addr mac_addr;
+
+	net_eth_ipv6_mcast_to_mac_addr(addr, &mac_addr);
+
+	if (is_joined) {
+		ENET_AddMulticastGroup(ENET, mac_addr.addr);
+	} else {
+		ENET_LeaveMulticastGroup(ENET, mac_addr.addr);
+	}
+}
+#endif /* CONFIG_NET_IPV6 */
+
+static void eth_iface_init(struct net_if *iface)
 {
 	struct device *dev = net_if_get_device(iface);
 	struct eth_context *context = dev->driver_data;
 
+#if defined(CONFIG_NET_IPV6)
+	static struct net_if_mcast_monitor mon;
+
+	net_if_mcast_mon_register(&mon, iface, net_if_mcast_cb);
+#endif /* CONFIG_NET_IPV6 */
+
 	net_if_set_link_addr(iface, context->mac_addr,
 			     sizeof(context->mac_addr),
 			     NET_LINK_ETHERNET);
+
+	/* For VLAN, this value is only used to get the correct L2 driver */
 	context->iface = iface;
+
+	ethernet_init(iface);
 }
 
-static struct net_if_api api_funcs_0 = {
-	.init	= eth_0_iface_init,
-	.send	= eth_tx,
+static enum ethernet_hw_caps eth_mcux_get_capabilities(struct device *dev)
+{
+	ARG_UNUSED(dev);
+
+	return ETHERNET_HW_VLAN | ETHERNET_LINK_10BASE_T |
+		ETHERNET_LINK_100BASE_T;
+}
+
+static const struct ethernet_api api_funcs = {
+	.iface_api.init = eth_iface_init,
+	.iface_api.send = eth_tx,
+
+	.get_capabilities = eth_mcux_get_capabilities,
 };
 
 static void eth_mcux_rx_isr(void *p)
@@ -630,10 +723,9 @@ static struct eth_context eth_0_context = {
 	}
 };
 
-NET_DEVICE_INIT(eth_mcux_0, CONFIG_ETH_MCUX_0_NAME,
-		eth_0_init, &eth_0_context,
-		NULL, CONFIG_ETH_INIT_PRIORITY, &api_funcs_0,
-		ETHERNET_L2, NET_L2_GET_CTX_TYPE(ETHERNET_L2), 1500);
+ETH_NET_DEVICE_INIT(eth_mcux_0, CONFIG_ETH_MCUX_0_NAME, eth_0_init,
+		    &eth_0_context, NULL, CONFIG_ETH_INIT_PRIORITY,
+		    &api_funcs, 1500);
 
 static void eth_0_config_func(void)
 {

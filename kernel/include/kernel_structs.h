@@ -12,8 +12,14 @@
 #if !defined(_ASMLANGUAGE)
 #include <atomic.h>
 #include <misc/dlist.h>
+#include <misc/rb.h>
 #include <string.h>
 #endif
+
+#define K_NUM_PRIORITIES \
+	(CONFIG_NUM_COOP_PRIORITIES + CONFIG_NUM_PREEMPT_PRIORITIES + 1)
+
+#define K_NUM_PRIO_BITMAPS ((K_NUM_PRIORITIES + 31) >> 5)
 
 /*
  * Bitmask definitions for the struct k_thread.thread_state field.
@@ -21,7 +27,6 @@
  * Must be before kerneL_arch_data.h because it might need them to be already
  * defined.
  */
-
 
 /* states: common uses low bits, arch-specific use high bits */
 
@@ -43,6 +48,9 @@
 /* Thread is actively looking at events to see if they are ready */
 #define _THREAD_POLLING (1 << 5)
 
+/* Thread is present in the ready queue */
+#define _THREAD_QUEUED (1 << 6)
+
 /* end - states */
 
 #ifdef CONFIG_STACK_SENTINEL
@@ -61,21 +69,21 @@
 #if !defined(_ASMLANGUAGE)
 
 struct _ready_q {
-
+#ifndef CONFIG_SMP
 	/* always contains next thread to run: cannot be NULL */
 	struct k_thread *cache;
+#endif
 
-	/* bitmap of priorities that contain at least one ready thread */
-	u32_t prio_bmap[K_NUM_PRIO_BITMAPS];
-
-	/* ready queues, one per priority */
-	sys_dlist_t q[K_NUM_PRIORITIES];
+#ifdef CONFIG_SCHED_DUMB
+	sys_dlist_t runq;
+#else
+	struct _priq_rb runq;
+#endif
 };
 
 typedef struct _ready_q _ready_q_t;
 
-struct _kernel {
-
+struct _cpu {
 	/* nested interrupt count */
 	u32_t nested;
 
@@ -84,6 +92,35 @@ struct _kernel {
 
 	/* currently scheduled thread */
 	struct k_thread *current;
+
+	/* one assigned idle thread per CPU */
+	struct k_thread *idle_thread;
+
+	int id;
+};
+
+typedef struct _cpu _cpu_t;
+
+struct _kernel {
+	/* For compatibility with pre-SMP code, union the first CPU
+	 * record with the legacy fields so code can continue to use
+	 * the "_kernel.XXX" expressions and assembly offsets.
+	 */
+	union {
+		struct _cpu cpus[CONFIG_MP_NUM_CPUS];
+#ifndef CONFIG_SMP
+		struct {
+			/* nested interrupt count */
+			u32_t nested;
+
+			/* interrupt stack pointer base */
+			char *irq_stack;
+
+			/* currently scheduled thread */
+			struct k_thread *current;
+		};
+#endif
+	};
 
 #ifdef CONFIG_SYS_CLOCK_EXISTS
 	/* queue of timeouts */
@@ -110,12 +147,12 @@ struct _kernel {
 	 * for a thread to only "own" the XMM registers.
 	 */
 
-	/* thread (fiber or task) that owns the FP regs */
+	/* thread that owns the FP regs */
 	struct k_thread *current_fp;
 #endif
 
 #if defined(CONFIG_THREAD_MONITOR)
-	struct k_thread *threads; /* singly linked list of ALL fiber+tasks */
+	struct k_thread *threads; /* singly linked list of ALL threads */
 #endif
 
 	/* arch-specific part of _kernel */
@@ -126,12 +163,30 @@ typedef struct _kernel _kernel_t;
 
 extern struct _kernel _kernel;
 
+#ifdef CONFIG_SMP
+#define _current_cpu (_arch_curr_cpu())
+#define _current (_arch_curr_cpu()->current)
+#else
+#define _current_cpu (&_kernel.cpus[0])
 #define _current _kernel.current
+#endif
+
 #define _ready_q _kernel.ready_q
 #define _timeout_q _kernel.timeout_q
 #define _threads _kernel.threads
 
 #include <kernel_arch_func.h>
+
+#if CONFIG_USE_SWITCH
+/* This is a arch function traditionally, but when the switch-based
+ * _Swap() is in use it's a simple inline provided by the kernel.
+ */
+static ALWAYS_INLINE void
+_set_thread_return_value(struct k_thread *thread, unsigned int value)
+{
+	thread->swap_retval = value;
+}
+#endif
 
 static ALWAYS_INLINE void
 _set_thread_return_value_with_data(struct k_thread *thread,
@@ -176,6 +231,10 @@ static ALWAYS_INLINE void _new_thread_init(struct k_thread *thread,
 	/* Initialize custom data field (value is opaque to kernel) */
 	thread->custom_data = NULL;
 #endif
+
+#if defined(CONFIG_USERSPACE)
+	thread->mem_domain_info.mem_domain = NULL;
+#endif /* CONFIG_USERSPACE */
 
 #if defined(CONFIG_THREAD_STACK_INFO)
 	thread->stack_info.start = (u32_t)pStack;

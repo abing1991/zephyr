@@ -22,8 +22,12 @@
 #define PRINT_DATA(fmt, ...) printk(fmt, ##__VA_ARGS__)
 #endif /* CONFIG_STDOUT_CONSOLE */
 
+#if defined CONFIG_ARCH_POSIX
+#include "posix_board_if.h"
+#endif
+
 /**
- * @def TC_PRINT_RUN_ID
+ * @def TC_PRINT_RUNID
  * @brief Report a Run ID
  *
  * When the CPP symbol \c TC_RUNID is defined (for example, from the
@@ -55,10 +59,12 @@
 
 #define FAIL "FAIL"
 #define PASS "PASS"
+#define SKIP "SKIP"
 #define FMT_ERROR "%s - %s@%d. "
 
 #define TC_PASS 0
 #define TC_FAIL 1
+#define TC_SKIP 2
 
 #define TC_ERROR(fmt, ...)                               \
 	do {                                                 \
@@ -73,12 +79,23 @@
 /* prints result and the function name */
 #define _TC_END_RESULT(result, func)					\
 	do {								\
-		TC_END(result, "%s - %s.\n",				\
-		       (result) == TC_PASS ? PASS : FAIL, func);	\
+		if ((result) == TC_PASS) {				\
+			TC_END(result, "%s - %s\n", PASS, func);	\
+		} else if ((result) == TC_FAIL) {			\
+			TC_END(result, "%s - %s\n", FAIL, func);	\
+		} else {						\
+			TC_END(result, "%s - %s\n", SKIP, func);	\
+		}							\
 		PRINT_LINE;						\
 	} while (0)
 #define TC_END_RESULT(result)                           \
 	_TC_END_RESULT((result), __func__)
+
+#if defined(CONFIG_ARCH_POSIX)
+#define TC_END_POST(result) posix_exit(result)
+#else
+#define TC_END_POST(result)
+#endif /* CONFIG_ARCH_POSIX */
 
 #define TC_END_REPORT(result)                               \
 	do {                                                    \
@@ -87,6 +104,7 @@
 		TC_END(result,                                      \
 		       "PROJECT EXECUTION %s\n",               \
 		       (result) == TC_PASS ? "SUCCESSFUL" : "FAILED");	\
+		TC_END_POST(result);                                    \
 	} while (0)
 
 #define TC_CMD_DEFINE(name)				\

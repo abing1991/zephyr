@@ -5,6 +5,9 @@ Zephyr Project
 
    <a href="https://bestpractices.coreinfrastructure.org/projects/74"><img
    src="https://bestpractices.coreinfrastructure.org/projects/74/badge"></a>
+   <img
+   src="https://api.shippable.com/projects/58ffb2b8baa5e307002e1d79/badge?branch=master">
+
 
 The Zephyr Project is a scalable real-time operating system (RTOS) supporting
 multiple hardware architectures, optimized for resource constrained devices,
@@ -48,7 +51,7 @@ support systems:
   `Zephyr Introduction`_ and `Getting Started Guide`_.
 
 * **Releases**: Source code for Zephyr kernel releases are available at
-  https://zephyrproject.org/downloads. On this page,
+  https://zephyrproject.org/developers/#downloads. On this page,
   you'll find release information, and links to download or clone source
   code from our GitHub repository.  You'll also find links for the Zephyr
   SDK, a moderated collection of tools and libraries used to develop your
@@ -65,23 +68,32 @@ support systems:
 
 * **Documentation**: Extensive Project technical documentation is developed
   along with the Zephyr kernel itself, and can be found at
-  https://zephyrproject.org/doc.  Additional documentation is maintained in
+  http://docs.zephyrproject.org.  Additional documentation is maintained in
   the `Zephyr GitHub wiki`_.
 
-* **Issue Reporting and Tracking**: Requirements and Issue tracking is done in
-  our JIRA system: https://jira.zephyrproject.org. You can browse through the
-  reported issues and submit issues of your own.
+* **Cross-reference**: Source code cross-reference for the Zephyr
+  kernel and samples code is available at
+  https://elixir.bootlin.com/zephyr/latest/source.
 
-* **Security-related Issue Reporting**: For security-related inquiries or
-  reporting suspected security-related bugs in the Zephyr OS, please
-  send email to vulnerabilities@zephyrproject.org.  We will assess and fix
-  flaws according to our security policy outlined in the Zephyr Project
+* **Issue Reporting and Tracking**: Requirements and Issue tracking is done in
+  the Github issues system: https://github.com/zephyrproject-rtos/zephyr/issues.
+  You can browse through the reported issues and submit issues of your own.
+
+* **Security-related Issue Reporting and Tracking**: For security-related
+  inquiries or reporting suspected security-related bugs in the Zephyr OS,
+  please send email to vulnerabilities@zephyrproject.org.  We will assess and
+  fix flaws according to our security policy outlined in the Zephyr Project
   `Security Overview`_.
 
-* **Mailing List**: The `Zephyr Mailing Lists`_ are perhaps the most convenient
+  Security related issue tracking is done in JIRA.  The location of this JIRA
+  is https://zephyrprojectsec.atlassian.net.
+
+* **Mailing List**: The `Zephyr Development mailing list`_ is perhaps the most convenient
   way to track developer discussions and to ask your own support questions to
-  the Zephyr project community.
-  You can also read through message archives to follow
+  the Zephyr project community.  There are also specific `Zephyr mailing list
+  subgroups`_ for announcements, builds, marketing, and Technical
+  Steering Committee notes, for example.
+  You can read through the message archives to follow
   past posts and discussions, a good thing to do to discover more about the
   Zephyr project.
 
@@ -91,11 +103,12 @@ support systems:
   client or use a client-side application such as pidgin.
 
 
-.. _supported boards: https://www.zephyrproject.org/doc/boards/boards.html
-.. _Zephyr Introduction: https://www.zephyrproject.org/doc/introduction/introducing_zephyr.html
-.. _Getting Started Guide: https://www.zephyrproject.org/doc/getting_started/getting_started.html
-.. _Contribution Guide: https://www.zephyrproject.org/doc/contribute/contribute_guidelines.html
+.. _supported boards: http://docs.zephyrproject.org/boards/boards.html
+.. _Zephyr Introduction: http://docs.zephyrproject.org/introduction/introducing_zephyr.html
+.. _Getting Started Guide: http://docs.zephyrproject.org/getting_started/getting_started.html
+.. _Contribution Guide: http://docs.zephyrproject.org/contribute/contribute_guidelines.html
 .. _Zephyr GitHub wiki: https://github.com/zephyrproject-rtos/zephyr/wiki
-.. _Zephyr Mailing Lists: https://lists.zephyrproject.org/
-.. _Sample and Demo Code Examples: https://www.zephyrproject.org/doc/samples/samples.html
-.. _Security Overview: https://www.zephyrproject.org/doc/security/security-overview.html
+.. _Zephyr Development mailing list: https://lists.zephyrproject.org/g/devel
+.. _Zephyr mailing list subgroups: https://lists.zephyrproject.org/g/main/subgroups
+.. _Sample and Demo Code Examples: http://docs.zephyrproject.org/samples/samples.html
+.. _Security Overview: http://docs.zephyrproject.org/security/security-overview.html

@@ -10,10 +10,11 @@
  * @brief Kernel semaphore object.
  *
  * The semaphores are of the 'counting' type, i.e. each 'give' operation will
- * increment the internal count by 1, if no fiber is pending on it. The 'init'
- * call initializes the count to 0. Following multiple 'give' operations, the
- * same number of 'take' operations can be performed without the calling fiber
- * having to pend on the semaphore, or the calling task having to poll.
+ * increment the internal count by 1, if no thread is pending on it. The 'init'
+ * call initializes the count to 'initial_count'. Following multiple 'give'
+ * operations, the same number of 'take' operations can be performed without
+ * the calling thread having to pend on the semaphore, or the calling task
+ * having to poll.
  */
 
 #include <kernel.h>
@@ -25,6 +26,7 @@
 #include <misc/dlist.h>
 #include <ksched.h>
 #include <init.h>
+#include <syscall_handler.h>
 
 extern struct k_sem _k_sem_list_start[];
 extern struct k_sem _k_sem_list_end[];
@@ -52,31 +54,38 @@ SYS_INIT(init_sem_module, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_OBJECTS);
 
 #endif /* CONFIG_OBJECT_TRACING */
 
-void k_sem_init(struct k_sem *sem, unsigned int initial_count,
-		unsigned int limit)
+void _impl_k_sem_init(struct k_sem *sem, unsigned int initial_count,
+		      unsigned int limit)
 {
 	__ASSERT(limit != 0, "limit cannot be zero");
+	__ASSERT(initial_count <= limit, "count cannot be greater than limit");
 
 	sem->count = initial_count;
 	sem->limit = limit;
-	sys_dlist_init(&sem->wait_q);
+	_waitq_init(&sem->wait_q);
 #if defined(CONFIG_POLL)
 	sys_dlist_init(&sem->poll_events);
 #endif
 
 	SYS_TRACING_OBJ_INIT(k_sem, sem);
+
+	_k_object_init(sem);
 }
 
+#ifdef CONFIG_USERSPACE
+Z_SYSCALL_HANDLER(k_sem_init, sem, initial_count, limit)
+{
+	Z_OOPS(Z_SYSCALL_OBJ_INIT(sem, K_OBJ_SEM));
+	Z_OOPS(Z_SYSCALL_VERIFY(limit != 0 && initial_count <= limit));
+	_impl_k_sem_init((struct k_sem *)sem, initial_count, limit);
+	return 0;
+}
+#endif
 
-/* returns 1 if a reschedule must take place, 0 otherwise */
-static inline int handle_poll_events(struct k_sem *sem)
+static inline void handle_poll_events(struct k_sem *sem)
 {
 #ifdef CONFIG_POLL
-	u32_t state = K_POLL_STATE_SEM_AVAILABLE;
-
-	return _handle_obj_poll_events(&sem->poll_events, state);
-#else
-	return 0;
+	_handle_obj_poll_events(&sem->poll_events, K_POLL_STATE_SEM_AVAILABLE);
 #endif
 }
 
@@ -85,20 +94,17 @@ static inline void increment_count_up_to_limit(struct k_sem *sem)
 	sem->count += (sem->count != sem->limit);
 }
 
-/* returns 1 if _Swap() will need to be invoked, 0 otherwise */
-static int do_sem_give(struct k_sem *sem)
+static void do_sem_give(struct k_sem *sem)
 {
 	struct k_thread *thread = _unpend_first_thread(&sem->wait_q);
 
-	if (!thread) {
+	if (thread) {
+		_ready_thread(thread);
+		_set_thread_return_value(thread, 0);
+	} else {
 		increment_count_up_to_limit(sem);
-		return handle_poll_events(sem);
+		handle_poll_events(sem);
 	}
-	(void)_abort_thread_timeout(thread);
-	_ready_thread(thread);
-	_set_thread_return_value(thread, 0);
-
-	return !_is_in_isr() && _must_switch_threads();
 }
 
 /*
@@ -115,32 +121,28 @@ void _sem_give_non_preemptible(struct k_sem *sem)
 {
 	struct k_thread *thread;
 
-	thread = _unpend_first_thread(&sem->wait_q);
+	thread = _unpend1_no_timeout(&sem->wait_q);
 	if (!thread) {
 		increment_count_up_to_limit(sem);
 		return;
 	}
 
-	_abort_thread_timeout(thread);
-
-	_ready_thread(thread);
 	_set_thread_return_value(thread, 0);
 }
 
-void k_sem_give(struct k_sem *sem)
+void _impl_k_sem_give(struct k_sem *sem)
 {
-	unsigned int key;
+	unsigned int key = irq_lock();
 
-	key = irq_lock();
-
-	if (do_sem_give(sem)) {
-		_Swap(key);
-	} else {
-		irq_unlock(key);
-	}
+	do_sem_give(sem);
+	_reschedule(key);
 }
 
-int k_sem_take(struct k_sem *sem, s32_t timeout)
+#ifdef CONFIG_USERSPACE
+Z_SYSCALL_HANDLER1_SIMPLE_VOID(k_sem_give, K_OBJ_SEM, struct k_sem *);
+#endif
+
+int _impl_k_sem_take(struct k_sem *sem, s32_t timeout)
 {
 	__ASSERT(!_is_in_isr() || timeout == K_NO_WAIT, "");
 
@@ -157,7 +159,16 @@ int k_sem_take(struct k_sem *sem, s32_t timeout)
 		return -EBUSY;
 	}
 
-	_pend_current_thread(&sem->wait_q, timeout);
-
-	return _Swap(key);
+	return _pend_current_thread(key, &sem->wait_q, timeout);
 }
+
+#ifdef CONFIG_USERSPACE
+Z_SYSCALL_HANDLER(k_sem_take, sem, timeout)
+{
+	Z_OOPS(Z_SYSCALL_OBJ(sem, K_OBJ_SEM));
+	return _impl_k_sem_take((struct k_sem *)sem, timeout);
+}
+
+Z_SYSCALL_HANDLER1_SIMPLE_VOID(k_sem_reset, K_OBJ_SEM, struct k_sem *);
+Z_SYSCALL_HANDLER1_SIMPLE(k_sem_count_get, K_OBJ_SEM, struct k_sem *);
+#endif

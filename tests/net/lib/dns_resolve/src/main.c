@@ -127,7 +127,8 @@ static int sender_iface(struct net_if *iface, struct net_pkt *pkt)
 	}
 
 	if (!timeout_query) {
-		struct net_if_test *data = iface->dev->driver_data;
+		struct net_if_test *data =
+			net_if_get_device(iface)->driver_data;
 		struct dns_resolve_context *ctx;
 		int slot;
 
@@ -211,7 +212,7 @@ static void test_init(void)
 
 	iface1 = net_if_get_by_index(0);
 
-	((struct net_if_test *)iface1->dev->driver_data)->idx = 0;
+	((struct net_if_test *)net_if_get_device(iface1)->driver_data)->idx = 0;
 
 #if defined(CONFIG_NET_IPV6)
 	ifaddr = net_if_ipv6_addr_add(iface1, &my_addr1,
@@ -220,6 +221,8 @@ static void test_init(void)
 		DBG("Cannot add IPv6 address %s\n",
 		       net_sprint_ipv6_addr(&my_addr1));
 		zassert_not_null(ifaddr, "addr1");
+
+		return;
 	}
 
 	/* For testing purposes we need to set the adddresses preferred */
@@ -374,9 +377,11 @@ static void dns_query_ipv4_server_count(void)
 			continue;
 		}
 
-		if (ctx->servers[i].dns_server.sa_family == AF_INET) {
-			count++;
+		if (ctx->servers[i].dns_server.sa_family == AF_INET6) {
+			continue;
 		}
+
+		count++;
 
 		if (net_sin(&ctx->servers[i].dns_server)->sin_port ==
 		    ntohs(53)) {
@@ -385,7 +390,7 @@ static void dns_query_ipv4_server_count(void)
 	}
 
 	zassert_equal(count, 2, "Invalid number of IPv4 servers");
-	zassert_equal(port, 2, "Invalid number of IPv4 servers with port 53");
+	zassert_equal(port, 1, "Invalid number of IPv4 servers with port 53");
 }
 
 static void dns_query_ipv6_server_count(void)
@@ -402,9 +407,11 @@ static void dns_query_ipv6_server_count(void)
 			continue;
 		}
 
-		if (ctx->servers[i].dns_server.sa_family == AF_INET6) {
-			count++;
+		if (ctx->servers[i].dns_server.sa_family == AF_INET) {
+			continue;
 		}
+
+		count++;
 
 		if (net_sin6(&ctx->servers[i].dns_server)->sin6_port ==
 		    ntohs(53)) {
@@ -412,8 +419,13 @@ static void dns_query_ipv6_server_count(void)
 		}
 	}
 
+#if defined(CONFIG_NET_IPV6)
 	zassert_equal(count, 2, "Invalid number of IPv6 servers");
-	zassert_equal(port, 2, "Invalid number of IPv6 servers with port 53");
+	zassert_equal(port, 1, "Invalid number of IPv6 servers with port 53");
+#else
+	zassert_equal(count, 0, "Invalid number of IPv6 servers");
+	zassert_equal(port, 0, "Invalid number of IPv6 servers with port 53");
+#endif
 }
 
 static void dns_query_too_many(void)
@@ -671,10 +683,12 @@ void dns_result_numeric_cb(enum dns_resolve_status status,
 	}
 
 	if (info && info->ai_family == AF_INET6) {
+#if defined(CONFIG_NET_IPV6)
 		if (net_ipv6_addr_cmp(&net_sin6(&info->ai_addr)->sin6_addr,
 				      &my_addr3) != true) {
 			zassert_true(false, "IPv6 address does not match");
 		}
+#endif
 	}
 
 	k_sem_give(&wait_data2);

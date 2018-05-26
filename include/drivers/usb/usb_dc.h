@@ -39,6 +39,7 @@ enum usb_dc_status_code {
 	USB_DC_DISCONNECTED, /* USB connection lost */
 	USB_DC_SUSPEND,      /* USB connection suspended by the HOST */
 	USB_DC_RESUME,       /* USB connection resumed by the HOST */
+	USB_DC_INTERFACE,    /* USB interface selected */
 	USB_DC_UNKNOWN       /* Initial USB connection status */
 };
 
@@ -85,7 +86,8 @@ typedef void (*usb_dc_ep_callback)(u8_t ep,
 /**
  * Callback function signature for the device
  */
-typedef void (*usb_dc_status_callback)(enum usb_dc_status_code cb_status);
+typedef void (*usb_dc_status_callback)(enum usb_dc_status_code cb_status,
+				       u8_t *param);
 
 /**
  * @brief attach USB for device connection
@@ -324,5 +326,15 @@ int usb_dc_ep_read_wait(u8_t ep, u8_t *data, u32_t max_data_len,
  * @return 0 on success, negative errno code on fail.
  */
 int usb_dc_ep_read_continue(u8_t ep);
+
+/**
+ * @brief Get endpoint max packet size
+ *
+ * @param[in]  ep           Endpoint address corresponding to the one
+ *                          listed in the device configuration table
+ *
+ * @return enpoint max packet size (mps)
+ */
+int usb_dc_ep_mps(u8_t ep);
 
 #endif /* __USB_DC_H__ */

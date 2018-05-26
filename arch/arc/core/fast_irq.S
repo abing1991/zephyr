@@ -123,8 +123,6 @@ firq_nest:
 
 SECTION_FUNC(TEXT, _firq_exit)
 
-	pop sp
-
 #if CONFIG_RGF_NUM_BANKS != 1
 #ifndef CONFIG_FIRQ_NO_LPCC
 	/* restore lp_count, lp_start, lp_end from r23-r25 */
@@ -142,17 +140,14 @@ SECTION_FUNC(TEXT, _firq_exit)
 	bne.d	_firq_no_reschedule
 	st	r0, [r1]
 
+#ifdef CONFIG_STACK_SENTINEL
+	bl _check_stack_sentinel
+#endif
+
 #ifdef CONFIG_PREEMPT_ENABLED
 
 	mov_s r1, _kernel
 	ld_s r2, [r1, _kernel_offset_to_current]
-
-	/*
-	 * Non-preemptible thread ? Do not schedule (see explanation of
-	 * preempt field in kernel_struct.h).
-	 */
-	ldh_s r0, [r2, _thread_offset_to_preempt]
-	brhs r0, _NON_PREEMPT_THRESHOLD, _firq_no_reschedule
 
 	/* Check if the current thread (in r2) is the cached thread */
 	ld_s r0, [r1, _kernel_offset_to_ready_q_cache]
@@ -164,6 +159,8 @@ SECTION_FUNC(TEXT, _firq_exit)
 
 .balign 4
 _firq_no_reschedule:
+	pop sp
+
 	/*
 	 * Keeping this code block close to those that use it allows using brxx
 	 * instruction instead of a pair of cmp and bxx
@@ -207,6 +204,7 @@ _firq_no_reschedule:
 
 .balign 4
 _firq_reschedule:
+	pop sp
 
 #if CONFIG_RGF_NUM_BANKS != 1
 	/*
@@ -257,10 +255,10 @@ _firq_reschedule:
 	 */
 	_load_callee_saved_regs
 
-#ifdef CONFIG_MPU_STACK_GUARD
+#if defined(CONFIG_MPU_STACK_GUARD) || defined(CONFIG_USERSPACE)
 	push_s r2
 	mov r0, r2
-	bl configure_mpu_stack_guard
+	bl configure_mpu_thread
 	pop_s r2
 #endif
 

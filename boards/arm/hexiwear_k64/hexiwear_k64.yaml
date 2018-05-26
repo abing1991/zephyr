@@ -7,3 +7,9 @@ toolchain:
   - gccarmemb
 supported:
   - ble
+  - adc
+  - gpio
+  - i2c
+  - spi
+  - pwm
+  - watchdog

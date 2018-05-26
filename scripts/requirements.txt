@@ -1,12 +1,15 @@
-breathe==4.6.0
-sphinx==1.5.5
-docutils==0.13.1
+wheel==0.30.0
+breathe==4.7.3
+sphinx==1.6.5
+docutils==0.14
 sphinx_rtd_theme
 junit2html
 PyYAML==3.12
 ply==3.10
 hub==2.0
-pyocd
 gitlint
 pyelftools==0.24
+pyserial
 pykwalify
+# "win32" is used for 64-bit Windows as well
+windows-curses; sys_platform == "win32"

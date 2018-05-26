@@ -11,7 +11,6 @@
  * Reset handler that prepares the system for running C code.
  */
 
-// #include <board.h>
 #include <toolchain.h>
 #include <linker/sections.h>
 #include <arch/cpu.h>
@@ -48,6 +47,11 @@ SECTION_FUNC(TEXT,__start)
 	/* lock interrupts: will get unlocked when switch to main task */
 	clri
 
+#if CONFIG_USERSPACE
+	lr r0, [_ARC_V2_STATUS32]
+	bset r0, r0, _ARC_V2_STATUS32_US_BIT
+	kflag r0
+#endif
 	mov r1, 1
 
 invalidate_and_disable_icache:

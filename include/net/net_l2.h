@@ -21,6 +21,7 @@ extern "C" {
 /**
  * @brief Network Layer 2 abstraction layer
  * @defgroup net_l2 Network L2 Abstraction Layer
+ * @ingroup networking
  * @{
  */
 
@@ -59,8 +60,6 @@ struct net_l2 {
 	extern const struct net_l2 NET_L2_GET_NAME(_name)
 #define NET_L2_GET_CTX_TYPE(_name) _name##_CTX_TYPE
 
-extern struct net_l2 __net_l2_start[];
-
 #ifdef CONFIG_NET_L2_DUMMY
 #define DUMMY_L2		DUMMY
 #define DUMMY_L2_CTX_TYPE	void*
@@ -69,14 +68,11 @@ NET_L2_DECLARE_PUBLIC(DUMMY_L2);
 
 #ifdef CONFIG_NET_L2_ETHERNET
 #define ETHERNET_L2		ETHERNET
-#define ETHERNET_L2_CTX_TYPE	void*
 NET_L2_DECLARE_PUBLIC(ETHERNET_L2);
 #endif /* CONFIG_NET_L2_ETHERNET */
 
 #ifdef CONFIG_NET_L2_IEEE802154
-#include <net/ieee802154.h>
 #define IEEE802154_L2		IEEE802154
-#define IEEE802154_L2_CTX_TYPE	struct ieee802154_context
 NET_L2_DECLARE_PUBLIC(IEEE802154_L2);
 #endif /* CONFIG_NET_L2_IEEE802154 */
 
@@ -86,13 +82,10 @@ NET_L2_DECLARE_PUBLIC(IEEE802154_L2);
 NET_L2_DECLARE_PUBLIC(BLUETOOTH_L2);
 #endif /* CONFIG_NET_L2_BT */
 
-#ifdef CONFIG_NET_OFFLOAD
-#define OFFLOAD_IP_L2		OFFLOAD_IP
-#define OFFLOAD_IP_L2_CTX_TYPE	void*
-NET_L2_DECLARE_PUBLIC(OFFLOAD_IP);
-#endif /* CONFIG_NET_OFFLOAD */
-
-extern struct net_l2 __net_l2_end[];
+#ifdef CONFIG_NET_L2_OPENTHREAD
+#define OPENTHREAD_L2		OPENTHREAD
+NET_L2_DECLARE_PUBLIC(OPENTHREAD_L2);
+#endif /* CONFIG_NET_L2_OPENTHREAD */
 
 #define NET_L2_INIT(_name, _recv_fn, _send_fn, _reserve_fn, _enable_fn)	\
 	const struct net_l2 (NET_L2_GET_NAME(_name)) __used		\

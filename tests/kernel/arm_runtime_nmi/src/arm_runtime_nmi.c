@@ -15,6 +15,11 @@
 #include <ztest.h>
 #include <tc_util.h>
 
+/* on v8m arch the nmi pend bit is renamed to pend nmi map it to old name */
+#ifndef SCB_ICSR_NMIPENDSET_Msk
+#define SCB_ICSR_NMIPENDSET_Msk SCB_ICSR_PENDNMISET_Msk
+#endif
+
 extern void _NmiHandlerSet(void (*pHandler)(void));
 
 static void nmi_test_isr(void)
@@ -25,6 +30,15 @@ static void nmi_test_isr(void)
 	TC_END_REPORT(TC_PASS);
 }
 
+/**
+ * @brief test the behavior of CONFIG_RUNTIME_NMI at run time
+ *
+ * @details this test is to validate _NmiHandlerSet() api.
+ * First we configure the NMI isr using _NmiHandlerSet() api.
+ * After wait for some time, and set the  Interrupt Control and
+ * State Register(ICSR) of System control block (SCB).
+ * The registered NMI isr should fire immediately.
+ */
 void test_arm_runtime_nmi(void)
 {
 	u32_t i = 0;

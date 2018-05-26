@@ -6,3 +6,8 @@ toolchain:
   - zephyr
   - gccarmemb
 ram: 40
+supported:
+  - gpio
+  - i2c
+  - spi
+  - usb_device

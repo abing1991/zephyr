@@ -4,12 +4,20 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-config HAS_NORDIC_MDK
-	bool
-
-config HAS_NORDIC_HAL
-	bool
-
 config HAS_NORDIC_DRIVERS
 	bool
-	select HAS_NORDIC_HAL
+
+config HAS_NRFX
+	bool
+
+config NRFX_SPI
+	bool
+
+config NRFX_SPIM
+	bool
+
+config NRFX_SPIS
+	bool
+
+config NRFX_WDT
+	bool

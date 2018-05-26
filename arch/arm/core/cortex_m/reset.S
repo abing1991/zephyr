@@ -23,6 +23,9 @@ _ASM_FILE_PROLOGUE
 GTEXT(__reset)
 GTEXT(memset)
 GDATA(_interrupt_stack)
+#if defined(CONFIG_PLATFORM_SPECIFIC_INIT)
+GTEXT(_PlatformInit)
+#endif
 
 /**
  *
@@ -57,15 +60,19 @@ SECTION_SUBSEC_FUNC(TEXT,_reset_section,__reset)
  */
 SECTION_SUBSEC_FUNC(TEXT,_reset_section,__start)
 
+#if defined(CONFIG_PLATFORM_SPECIFIC_INIT)
+    bl _PlatformInit
+#endif
+
     /* lock interrupts: will get unlocked when switch to main task */
-#if defined(CONFIG_ARMV6_M)
+#if defined(CONFIG_ARMV6_M_ARMV8_M_BASELINE)
     cpsid i
-#elif defined(CONFIG_ARMV7_M)
+#elif defined(CONFIG_ARMV7_M_ARMV8_M_MAINLINE)
     movs.n r0, #_EXC_IRQ_DEFAULT_PRIO
     msr BASEPRI, r0
 #else
 #error Unknown ARM architecture
-#endif /* CONFIG_ARMV6_M */
+#endif /* CONFIG_ARMV6_M_ARMV8_M_BASELINE */
 
 #ifdef CONFIG_WDOG_INIT
     /* board-specific watchdog initialization is necessary */
@@ -81,7 +88,7 @@ SECTION_SUBSEC_FUNC(TEXT,_reset_section,__start)
 
     /*
      * Set PSP and use it to boot without using MSP, so that it
-     * gets set to _interrupt_stack during nanoInit().
+     * gets set to _interrupt_stack during initialisation.
      */
     ldr r0, =_interrupt_stack
     ldr r1, =CONFIG_ISR_STACK_SIZE
@@ -89,6 +96,12 @@ SECTION_SUBSEC_FUNC(TEXT,_reset_section,__start)
     msr PSP, r0
     movs.n r0, #2	/* switch to using PSP (bit1 of CONTROL reg) */
     msr CONTROL, r0
+    /*
+     * When changing the stack pointer, software must use an ISB instruction
+     * immediately after the MSR instruction. This ensures that instructions
+     * after the ISB instruction execute using the new stack pointer.
+    */
+    isb
 
     b _PrepC
 

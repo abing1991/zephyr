@@ -20,13 +20,11 @@
 static inline int hp206c_bus_config(struct device *dev)
 {
 	struct hp206c_device_data *hp206c = dev->driver_data;
-	union dev_config i2c_cfg;
+	u32_t i2c_cfg;
 
-	i2c_cfg.raw = 0;
-	i2c_cfg.bits.is_master_device = 1;
-	i2c_cfg.bits.speed = I2C_SPEED_STANDARD;
+	i2c_cfg = I2C_MODE_MASTER | I2C_SPEED_SET(I2C_SPEED_STANDARD);
 
-	return i2c_configure(hp206c->i2c, i2c_cfg.raw);
+	return i2c_configure(hp206c->i2c, i2c_cfg);
 }
 
 static int hp206c_read(struct device *dev, u8_t cmd, u8_t *data,
@@ -258,7 +256,7 @@ static int hp206c_channel_get(struct device *dev,
 			      struct sensor_value *val)
 {
 	switch (chan) {
-	case SENSOR_CHAN_TEMP:
+	case SENSOR_CHAN_AMBIENT_TEMP:
 		return hp206c_temperature_get(dev, val);
 
 	case SENSOR_CHAN_PRESS:
@@ -309,12 +307,11 @@ static int hp206c_init(struct device *dev)
 		return -EIO;
 	}
 
-	dev->driver_api = &hp206c_api;
-
 	return 0;
 }
 
 static struct hp206c_device_data hp206c_data;
 
-DEVICE_INIT(hp206c, CONFIG_HP206C_DRV_NAME, hp206c_init, &hp206c_data,
-	    NULL, POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY);
+DEVICE_AND_API_INIT(hp206c, CONFIG_HP206C_DRV_NAME, hp206c_init, &hp206c_data,
+		    NULL, POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY,
+		    &hp206c_api);

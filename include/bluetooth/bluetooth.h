@@ -56,6 +56,21 @@ typedef void (*bt_ready_cb_t)(int err);
  */
 int bt_enable(bt_ready_cb_t cb);
 
+/** @brief Set the local Identity Address
+ *
+ *  Allows setting the local Identity Address from the application.
+ *  This API must be called before calling bt_enable(). Calling it at any
+ *  other time will cause it to fail. In most cases the application doesn't
+ *  need to use this API, however there are a few valid cases where
+ *  it can be useful (such as for testing).
+ *
+ *  At the moment, the given address must be a static random address. In the
+ *  future support for public addresses may be added.
+ *
+ *  @return Zero on success or (negative) error code otherwise.
+ */
+int bt_set_id_addr(const bt_addr_le_t *addr);
+
 /* Advertising API */
 
 /** Description of different data types that can be encoded into
@@ -115,6 +130,12 @@ enum {
 	 *  occur.
 	 */
 	BT_LE_ADV_OPT_ONE_TIME = BIT(1),
+
+	/** Advertise using the identity address as the own address.
+	 *  @warning This will compromise the privacy of the device, so care
+	 *           must be taken when using this option.
+	 */
+	BT_LE_ADV_OPT_USE_IDENTITY = BIT(2),
 };
 
 /** LE Advertising Parameters. */
@@ -127,12 +148,6 @@ struct bt_le_adv_param {
 
 	/** Maximum Advertising Interval (N * 0.625) */
 	u16_t interval_max;
-
-	/** Optional predefined (random) own address. Currently
-	 *  the only permitted use of this is for NRPA with
-	 *  non-connectable advertising.
-	 */
-	const bt_addr_t *own_addr;
 };
 
 /** Helper to declare advertising parameters inline
@@ -423,7 +438,7 @@ static inline int bt_addr_to_str(const bt_addr_t *addr, char *str, size_t len)
 static inline int bt_addr_le_to_str(const bt_addr_le_t *addr, char *str,
 				    size_t len)
 {
-	char type[7];
+	char type[10];
 
 	switch (addr->type) {
 	case BT_ADDR_LE_PUBLIC:
@@ -431,6 +446,12 @@ static inline int bt_addr_le_to_str(const bt_addr_le_t *addr, char *str,
 		break;
 	case BT_ADDR_LE_RANDOM:
 		strcpy(type, "random");
+		break;
+	case BT_ADDR_LE_PUBLIC_ID:
+		strcpy(type, "public id");
+		break;
+	case BT_ADDR_LE_RANDOM_ID:
+		strcpy(type, "random id");
 		break;
 	default:
 		snprintk(type, sizeof(type), "0x%02x", addr->type);
@@ -467,6 +488,15 @@ int bt_br_set_discoverable(bool enable);
  *  already set. Zero if done successfully.
  */
 int bt_br_set_connectable(bool enable);
+
+/** Clear pairing information.
+  *
+  * @param addr  Remote address, NULL or BT_ADDR_LE_ANY to clear all remote
+  *              devices.
+  *
+  * @return 0 on success or negative error value on failure.
+  */
+int bt_unpair(const bt_addr_le_t *addr);
 
 /**
  * @}

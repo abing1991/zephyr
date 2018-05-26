@@ -26,6 +26,7 @@
 #include <net/net_ip.h>
 #include <net/net_if.h>
 #include <net/net_context.h>
+#include <net/ethernet_vlan.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,7 @@ extern "C" {
 /**
  * @brief Network packet management library
  * @defgroup net_pkt Network Packet Library
+ * @ingroup networking
  * @{
  */
 
@@ -45,6 +47,9 @@ struct net_context;
 struct net_pkt {
 	/** FIFO uses first 4 bytes itself, reserve space */
 	int _reserved;
+
+	/** Internal variable that is used when packet is sent */
+	struct k_work work;
 
 	/** Slab pointer from where it belongs to */
 	struct k_mem_slab *slab;
@@ -65,12 +70,25 @@ struct net_pkt {
 
 	/** @cond ignore */
 
+#if defined(CONFIG_NET_ROUTING)
+	struct net_if *orig_iface; /* Original network interface */
+#endif
+
 	u8_t *appdata;	/* application data starts here */
 	u8_t *next_hdr;	/* where is the next header */
 
 	/* Filled by layer 2 when network packet is received. */
 	struct net_linkaddr lladdr_src;
 	struct net_linkaddr lladdr_dst;
+
+#if defined(CONFIG_NET_STATISTICS)
+	/* If statistics is enabled, then speed up length calculation by
+	 * doing it only once. This value is updated in net_if_queue_tx()
+	 * when packet is about to be sent.
+	 */
+	u16_t total_pkt_len;
+#endif
+	u16_t data_len;         /* amount of payload data that can be added */
 
 	u16_t appdatalen;
 	u8_t ll_reserve;	/* link layer header length */
@@ -93,10 +111,17 @@ struct net_pkt {
 				 * Used only if defined(CONFIG_NET_ROUTE)
 				 */
 	u8_t family     : 4;	/* IPv4 vs IPv6 */
-	u8_t _unused    : 3;
+	u8_t _unused    : 1;
+
+	union {
+		/* IPv6 hop limit or IPv4 ttl for this network packet.
+		 * The value is shared between IPv6 and IPv4.
+		 */
+		u8_t ipv6_hop_limit;
+		u8_t ipv4_ttl;
+	};
 
 #if defined(CONFIG_NET_IPV6)
-	u8_t ipv6_hop_limit;	/* IPv6 hop limit for this network packet. */
 	u8_t ipv6_ext_len;	/* length of extension headers */
 	u8_t ipv6_ext_opt_len; /* IPv6 ND option length */
 
@@ -114,9 +139,26 @@ struct net_pkt {
 #endif /* CONFIG_NET_IPV6_FRAGMENT */
 #endif /* CONFIG_NET_IPV6 */
 
-#if defined(CONFIG_NET_L2_IEEE802154)
-	u8_t ieee802154_rssi;
+#if defined(CONFIG_IEEE802154)
+	u8_t ieee802154_rssi; /* Received Signal Strength Indication */
+	u8_t ieee802154_lqi;  /* Link Quality Indicator */
 #endif
+
+#if NET_TC_COUNT > 1
+	/** Network packet priority, can be left out in which case packet
+	 * is not prioritised.
+	 */
+	u8_t priority;
+#endif
+
+#if defined(CONFIG_NET_VLAN)
+	/* VLAN TCI (Tag Control Information). This contains the Priority
+	 * Code Point (PCP), Drop Eligible Indicator (DEI) and VLAN
+	 * Identifier (VID, called more commonly VLAN tag). This value is
+	 * kept in host byte order.
+	 */
+	u16_t vlan_tci;
+#endif /* CONFIG_NET_VLAN */
 	/* @endcond */
 
 	/** Reference counter */
@@ -125,6 +167,10 @@ struct net_pkt {
 
 /** @cond ignore */
 
+static inline struct k_work *net_pkt_work(struct net_pkt *pkt)
+{
+	return &pkt->work;
+}
 
 /* The interface real ll address */
 static inline struct net_linkaddr *net_pkt_ll_if(struct net_pkt *pkt)
@@ -166,8 +212,25 @@ static inline void net_pkt_set_iface(struct net_pkt *pkt, struct net_if *iface)
 	 * the network address that is stored in pkt. This is done here so
 	 * that the address type is properly set and is not forgotten.
 	 */
-	pkt->lladdr_src.type = iface->link_addr.type;
-	pkt->lladdr_dst.type = iface->link_addr.type;
+	pkt->lladdr_src.type = net_if_get_link_addr(iface)->type;
+	pkt->lladdr_dst.type = net_if_get_link_addr(iface)->type;
+}
+
+static inline struct net_if *net_pkt_orig_iface(struct net_pkt *pkt)
+{
+#if defined(CONFIG_NET_ROUTING)
+	return pkt->orig_iface;
+#else
+	return pkt->iface;
+#endif
+}
+
+static inline void net_pkt_set_orig_iface(struct net_pkt *pkt,
+					  struct net_if *iface)
+{
+#if defined(CONFIG_NET_ROUTING)
+	pkt->orig_iface = iface;
+#endif
 }
 
 static inline u8_t net_pkt_family(struct net_pkt *pkt)
@@ -246,6 +309,19 @@ static inline void net_pkt_set_forwarding(struct net_pkt *pkt, bool forward)
 static inline bool net_pkt_forwarding(struct net_pkt *pkt)
 {
 	return false;
+}
+#endif
+
+#if defined(CONFIG_NET_IPV4)
+static inline u8_t net_pkt_ipv4_ttl(struct net_pkt *pkt)
+{
+	return pkt->ipv4_ttl;
+}
+
+static inline void net_pkt_set_ipv4_ttl(struct net_pkt *pkt,
+					u8_t ttl)
+{
+	pkt->ipv4_ttl = ttl;
 }
 #endif
 
@@ -332,6 +408,106 @@ static inline void net_pkt_set_ipv6_fragment_id(struct net_pkt *pkt,
 #define net_pkt_set_ipv6_ext_len(...)
 #endif /* CONFIG_NET_IPV6 */
 
+#if NET_TC_COUNT > 1
+static inline u8_t net_pkt_priority(struct net_pkt *pkt)
+{
+	return pkt->priority;
+}
+
+static inline void net_pkt_set_priority(struct net_pkt *pkt,
+					u8_t priority)
+{
+	pkt->priority = priority;
+}
+#else
+static inline u8_t net_pkt_priority(struct net_pkt *pkt)
+{
+	return 0;
+}
+#endif
+
+#if defined(CONFIG_NET_VLAN)
+static inline u16_t net_pkt_vlan_tag(struct net_pkt *pkt)
+{
+	return net_eth_vlan_get_vid(pkt->vlan_tci);
+}
+
+static inline void net_pkt_set_vlan_tag(struct net_pkt *pkt, u16_t tag)
+{
+	pkt->vlan_tci = net_eth_vlan_set_vid(pkt->vlan_tci, tag);
+}
+
+static inline u8_t net_pkt_vlan_priority(struct net_pkt *pkt)
+{
+	return net_eth_vlan_get_pcp(pkt->vlan_tci);
+}
+
+static inline void net_pkt_set_vlan_priority(struct net_pkt *pkt,
+					     u8_t priority)
+{
+	pkt->vlan_tci = net_eth_vlan_set_pcp(pkt->vlan_tci, priority);
+}
+
+static inline bool net_pkt_vlan_dei(struct net_pkt *pkt)
+{
+	return net_eth_vlan_get_dei(pkt->vlan_tci);
+}
+
+static inline void net_pkt_set_vlan_dei(struct net_pkt *pkt, bool dei)
+{
+	pkt->vlan_tci = net_eth_vlan_set_dei(pkt->vlan_tci, dei);
+}
+
+static inline void net_pkt_set_vlan_tci(struct net_pkt *pkt, u16_t tci)
+{
+	pkt->vlan_tci = tci;
+}
+
+static inline u16_t net_pkt_vlan_tci(struct net_pkt *pkt)
+{
+	return pkt->vlan_tci;
+}
+#else
+static inline u16_t net_pkt_vlan_tag(struct net_pkt *pkt)
+{
+	return NET_VLAN_TAG_UNSPEC;
+}
+
+static inline void net_pkt_set_vlan_tag(struct net_pkt *pkt, u16_t tag)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(tag);
+}
+
+static inline u8_t net_pkt_vlan_priority(struct net_pkt *pkt)
+{
+	ARG_UNUSED(pkt);
+	return 0;
+}
+
+static inline bool net_pkt_vlan_dei(struct net_pkt *pkt)
+{
+	return false;
+}
+
+static inline void net_pkt_set_vlan_dei(struct net_pkt *pkt, bool dei)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(dei);
+}
+
+static inline u16_t net_pkt_vlan_tci(struct net_pkt *pkt)
+{
+	return NET_VLAN_TAG_UNSPEC; /* assumes priority is 0 */
+}
+
+static inline void net_pkt_set_vlan_tci(struct net_pkt *pkt, u16_t tci)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(tci);
+}
+#endif
+
 static inline size_t net_pkt_get_len(struct net_pkt *pkt)
 {
 	return net_buf_frags_len(pkt->frags);
@@ -402,7 +578,7 @@ static inline void net_pkt_ll_swap(struct net_pkt *pkt)
 	net_pkt_ll_dst(pkt)->addr = addr;
 }
 
-#if defined(CONFIG_NET_L2_IEEE802154)
+#if defined(CONFIG_IEEE802154) || defined(CONFIG_IEEE802154_RAW_MODE)
 static inline u8_t net_pkt_ieee802154_rssi(struct net_pkt *pkt)
 {
 	return pkt->ieee802154_rssi;
@@ -412,6 +588,17 @@ static inline void net_pkt_set_ieee802154_rssi(struct net_pkt *pkt,
 					       u8_t rssi)
 {
 	pkt->ieee802154_rssi = rssi;
+}
+
+static inline u8_t net_pkt_ieee802154_lqi(struct net_pkt *pkt)
+{
+	return pkt->ieee802154_lqi;
+}
+
+static inline void net_pkt_set_ieee802154_lqi(struct net_pkt *pkt,
+					      u8_t lqi)
+{
+	pkt->ieee802154_lqi = lqi;
 }
 #endif
 
@@ -428,18 +615,33 @@ static inline void net_pkt_set_src_ipv6_addr(struct net_pkt *pkt)
 /* @endcond */
 
 /**
- * @brief Create a TX net_pkt slab that is used when sending user
- * specified data to network.
+ * @brief Create a net_pkt slab
  *
- * @param name Name of the pool.
+ * A net_pkt slab is used to store meta-information about
+ * network packets. It must be coupled with a data fragment pool
+ * (:c:macro:`NET_PKT_DATA_POOL_DEFINE`) used to store the actual
+ * packet data. The macro can be used by an application to define
+ * additional custom per-context TX packet slabs (see
+ * :c:func:`net_context_setup_pools`).
+ *
+ * @param name Name of the slab.
  * @param count Number of net_pkt in this slab.
  */
-#define NET_PKT_TX_SLAB_DEFINE(name, count)				\
+#define NET_PKT_SLAB_DEFINE(name, count)				\
 	K_MEM_SLAB_DEFINE(name, sizeof(struct net_pkt), count, 4)
 
+/* Backward compatibility macro */
+#define NET_PKT_TX_SLAB_DEFINE(name, count) NET_PKT_SLAB_DEFINE(name, count)
+
 /**
- * @brief Create a DATA net_buf pool that is used when sending user
- * specified data to network.
+ * @brief Create a data fragment net_buf pool
+ *
+ * A net_buf pool is used to store actual data for
+ * network packets. It must be coupled with a net_pkt slab
+ * (:c:macro:`NET_PKT_SLAB_DEFINE`) used to store the packet
+ * meta-information. The macro can be used by an application to
+ * define additional custom per-context TX packet pools (see
+ * :c:func:`net_context_setup_pools`).
  *
  * @param name Name of the pool.
  * @param count Number of net_buf in this pool.
@@ -470,8 +672,8 @@ struct net_buf *net_pkt_get_reserve_data_debug(struct net_buf_pool *pool,
 					       int line);
 
 #define net_pkt_get_reserve_data(pool, reserve_head, timeout)		\
-	net_pkt_get_reserve_debug(pool, reserve_head, timeout,		\
-				  __func__, __LINE__)
+	net_pkt_get_reserve_data_debug(pool, reserve_head, timeout,	\
+				       __func__, __LINE__)
 
 struct net_pkt *net_pkt_get_rx_debug(struct net_context *context,
 				     s32_t timeout,
@@ -1045,7 +1247,7 @@ struct net_buf *net_frag_read(struct net_buf *frag, u16_t offset,
  * length of data is placed in multiple fragments, this function will skip from
  * all fragments until it reaches N number of bytes. This function is useful
  * when unwanted data (e.g. reserved or not supported data in message) is part
- * of fragment and want to skip it.
+ * of fragment and we want to skip it.
  *
  * @param frag Network buffer fragment.
  * @param offset Offset of input buffer.
@@ -1222,6 +1424,8 @@ static inline struct net_buf *net_pkt_write_be32(struct net_pkt *pkt,
  * is based on fragment length (only user written data length, any tailroom
  * in fragments does not come to consideration unlike net_pkt_write()) and
  * calculates from input fragment starting position.
+ * If the data pointer is NULL, insert a sequence of zeros with the given
+ * length.
  *
  * Offset examples can be considered from net_pkt_write() api.
  * If the offset is more than already allocated fragments length then it is an
@@ -1231,7 +1435,7 @@ static inline struct net_buf *net_pkt_write_be32(struct net_pkt *pkt,
  * @param frag   Network buffer fragment.
  * @param offset Offset of fragment where insertion will start.
  * @param len    Length of the data to be inserted.
- * @param data   Data to be inserted
+ * @param data   Data to be inserted, can be NULL.
  * @param timeout Affects the action taken should the net buf pool be empty.
  *        If K_NO_WAIT, then return immediately. If K_FOREVER, then
  *        wait as long as necessary. Otherwise, wait up to the specified
@@ -1358,6 +1562,32 @@ void net_pkt_get_info(struct k_mem_slab **rx,
 		      struct k_mem_slab **tx,
 		      struct net_buf_pool **rx_data,
 		      struct net_buf_pool **tx_data);
+
+/**
+ * @brief Get source socket address.
+ *
+ * @param pkt Network packet
+ * @param addr Source socket address
+ * @param addrlen The length of source socket address
+ * @return 0 on success, <0 otherwise.
+ */
+
+int net_pkt_get_src_addr(struct net_pkt *pkt,
+			 struct sockaddr *addr,
+			 socklen_t addrlen);
+
+/**
+ * @brief Get destination socket address.
+ *
+ * @param pkt Network packet
+ * @param addr Destination socket address
+ * @param addrlen The length of destination socket address
+ * @return 0 on success, <0 otherwise.
+ */
+
+int net_pkt_get_dst_addr(struct net_pkt *pkt,
+			 struct sockaddr *addr,
+			 socklen_t addrlen);
 
 #if defined(CONFIG_NET_DEBUG_NET_PKT)
 /**

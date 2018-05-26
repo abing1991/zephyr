@@ -18,6 +18,7 @@ extern "C" {
 /**
  * @brief MQTT library
  * @defgroup mqtt MQTT library
+ * @ingroup networking
  * @{
  */
 
@@ -81,7 +82,7 @@ struct mqtt_ctx {
 
 	/** TLS thread parameters */
 	struct k_mem_pool *tls_mem_pool;
-	k_thread_stack_t tls_stack;
+	k_thread_stack_t *tls_stack;
 	size_t tls_stack_size;
 
 	/** TLS callback */

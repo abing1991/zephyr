@@ -11,3 +11,7 @@ testing:
   ignore_tags:
     - net
     - bluetooth
+supported:
+  - adc
+  - i2c
+  - gpio

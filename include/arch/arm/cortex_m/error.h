@@ -26,7 +26,6 @@ extern void _SysFatalErrorHandler(unsigned int reason, const NANO_ESF *esf);
 #endif
 
 #define _NANO_ERR_HW_EXCEPTION (0)      /* MPU/Bus/Usage fault */
-#define _NANO_ERR_INVALID_TASK_EXIT (1) /* Invalid task exit */
 #define _NANO_ERR_STACK_CHK_FAIL (2)    /* Stack corruption detected */
 #define _NANO_ERR_ALLOCATION_FAIL (3)   /* Kernel Allocation Failure */
 #define _NANO_ERR_KERNEL_OOPS (4)       /* Kernel oops (fatal to thread) */
@@ -34,8 +33,9 @@ extern void _SysFatalErrorHandler(unsigned int reason, const NANO_ESF *esf);
 
 #define _SVC_CALL_IRQ_OFFLOAD		1
 #define _SVC_CALL_RUNTIME_EXCEPT	2
+#define _SVC_CALL_SYSTEM_CALL		3
 
-#if defined(CONFIG_ARMV6_M)
+#if defined(CONFIG_ARMV6_M_ARMV8_M_BASELINE)
 /* ARMv6 will hard-fault if SVC is called with interrupts locked. Just
  * force them unlocked, the thread is in an undefined state anyway
  *
@@ -54,7 +54,7 @@ extern void _SysFatalErrorHandler(unsigned int reason, const NANO_ESF *esf);
 		: "memory"); \
 	CODE_UNREACHABLE; \
 } while (0)
-#elif defined(CONFIG_ARMV7_M)
+#elif defined(CONFIG_ARMV7_M_ARMV8_M_MAINLINE)
 #define _ARCH_EXCEPT(reason_p) do { \
 	__asm__ volatile ( \
 		"eors.n r0, r0\n\t" \
@@ -68,7 +68,7 @@ extern void _SysFatalErrorHandler(unsigned int reason, const NANO_ESF *esf);
 } while (0)
 #else
 #error Unknown ARM architecture
-#endif /* CONFIG_ARMV6_M */
+#endif /* CONFIG_ARMV6_M_ARMV8_M_BASELINE */
 
 #ifdef __cplusplus
 }

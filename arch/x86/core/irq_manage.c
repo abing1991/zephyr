@@ -21,6 +21,7 @@
 #include <misc/printk.h>
 #include <irq.h>
 #include <logging/kernel_event_logger.h>
+#include <kswap.h>
 
 extern void _SpuriousIntHandler(void *);
 extern void _SpuriousIntNoErrCodeHandler(void *);
@@ -44,7 +45,7 @@ void *__attribute__((section(".spurNoErrIsr")))
  * future iteration will resolve this.
  * We have a similar issue with the k_event_logger functions.
  *
- * See https://jira.zephyrproject.org/browse/ZEP-1595
+ * See https://github.com/zephyrproject-rtos/zephyr/issues/3056
  */
 
 #ifdef CONFIG_SYS_POWER_MANAGEMENT
@@ -81,11 +82,9 @@ void _arch_isr_direct_footer(int swap)
 	 *
 	 * 1) swap argument was enabled to this function
 	 * 2) We are not in a nested interrupt
-	 * 3) Current thread is preemptible
-	 * 4) Next thread to run in the ready queue is not this thread
+	 * 3) Next thread to run in the ready queue is not this thread
 	 */
 	if (swap && !_kernel.nested &&
-	    _current->base.preempt < _NON_PREEMPT_THRESHOLD &&
 	    _kernel.ready_q.cache != _current) {
 		unsigned int flags;
 

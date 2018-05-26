@@ -70,6 +70,9 @@ struct dma_stm32_config {
 	void (*config)(struct dma_stm32_device *);
 };
 
+/* DMA burst length */
+#define BURST_TRANS_LENGTH_1			0
+
 /* DMA direction */
 #define DMA_STM32_DEV_TO_MEM			0
 #define DMA_STM32_MEM_TO_DEV			1
@@ -365,6 +368,11 @@ static int dma_stm32_config(struct device *dev, u32_t id,
 	struct dma_stm32_stream_reg *regs = &ddata->stream[id].regs;
 	int ret;
 
+
+	if (id >= DMA_STM32_MAX_STREAMS) {
+		return -EINVAL;
+	}
+
 	if (stream->busy) {
 		return -EBUSY;
 	}
@@ -405,6 +413,10 @@ static int dma_stm32_start(struct device *dev, u32_t id)
 	u32_t irqstatus;
 	int ret;
 
+	if (id >= DMA_STM32_MAX_STREAMS) {
+		return -EINVAL;
+	}
+
 	ret = dma_stm32_disable_stream(ddata, id);
 	if (ret) {
 		return ret;
@@ -438,6 +450,10 @@ static int dma_stm32_stop(struct device *dev, u32_t id)
 	struct dma_stm32_stream *stream = &ddata->stream[id];
 	u32_t scr, sfcr, irqstatus;
 	int ret;
+
+	if (id >= DMA_STM32_MAX_STREAMS) {
+		return -EINVAL;
+	}
 
 	/* Disable all IRQs */
 	scr = dma_stm32_read(ddata, DMA_STM32_SCR(id));

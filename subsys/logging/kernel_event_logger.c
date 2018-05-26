@@ -33,6 +33,8 @@ u32_t _sys_k_event_logger_sleep_start_time;
 int _sys_k_event_logger_mask;
 #endif
 
+static int initialized;
+
 /**
  * @brief Initialize the kernel event logger system.
  *
@@ -46,6 +48,8 @@ static int _sys_k_event_logger_init(struct device *arg)
 
 	sys_event_logger_init(&sys_k_event_logger, _sys_k_event_logger_buffer,
 		CONFIG_KERNEL_EVENT_LOGGER_BUFFER_SIZE);
+
+	initialized = 1;
 
 	return 0;
 }
@@ -108,7 +112,7 @@ void _sys_k_event_logger_context_switch(void)
 	 * The mechanism we use to log the kernel events uses a sync semaphore
 	 * to inform that there are available events to be collected. The
 	 * context switch event can be triggered from a task. When we signal a
-	 * semaphore from a task and a fiber is waiting for that semaphore, a
+	 * semaphore from a thread is waiting for that semaphore, a
 	 * context switch is generated immediately. Due to the fact that we
 	 * register the context switch event while the context switch is being
 	 * processed, a new context switch can be generated before the kernel
@@ -142,6 +146,10 @@ void sys_k_event_logger_register_as_collector(void)
 void _sys_k_event_logger_interrupt(void)
 {
 	u32_t data[2];
+
+	if (!initialized) {
+		return;
+	}
 
 	if (!sys_k_must_log_event(KERNEL_EVENT_LOGGER_INTERRUPT_EVENT_ID)) {
 		return;
@@ -204,6 +212,10 @@ static void log_thread_event(enum sys_k_event_logger_thread_event event,
 			     struct k_thread *thread)
 {
 	u32_t data[3];
+
+	if (!initialized) {
+		return;
+	}
 
 	if (!sys_k_must_log_event(KERNEL_EVENT_LOGGER_THREAD_EVENT_ID)) {
 		return;

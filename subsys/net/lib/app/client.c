@@ -104,6 +104,95 @@ static int resolve_name(struct net_app_ctx *ctx,
 }
 #endif /* CONFIG_DNS_RESOLVER */
 
+static int try_resolve(struct net_app_ctx *ctx,
+		       const char *peer_addr_str,
+		       enum dns_query_type type,
+		       s32_t timeout)
+{
+#if !defined(CONFIG_DNS_RESOLVER)
+	NET_ERR("Invalid IP address %s", peer_addr_str);
+	return -EINVAL;
+#else
+	int ret;
+
+	ret = resolve_name(ctx, peer_addr_str, type, timeout);
+	if (ret < 0) {
+		NET_ERR("Cannot resolve %s (%d)", peer_addr_str, ret);
+	}
+
+	return ret;
+#endif
+}
+
+static int set_remote_addr(struct net_app_ctx *ctx,
+			   struct sockaddr *remote_addr,
+			   const char *peer_addr_str,
+			   bool peer_addr_ok,
+			   s32_t timeout)
+{
+	int ret;
+
+	if (peer_addr_ok && remote_addr->sa_family == AF_INET6) {
+#if defined(CONFIG_NET_IPV6)
+		memcpy(&ctx->ipv6.remote, remote_addr,
+		       sizeof(struct sockaddr));
+		ctx->default_ctx = &ctx->ipv6;
+		return 0;
+#else
+		return -EAFNOSUPPORT;
+#endif
+	}
+
+	if (peer_addr_ok && remote_addr->sa_family == AF_INET) {
+#if defined(CONFIG_NET_IPV4)
+		memcpy(&ctx->ipv4.remote, remote_addr,
+		       sizeof(struct sockaddr));
+		ctx->default_ctx = &ctx->ipv4;
+		return 0;
+#else
+		return -EAFNOSUPPORT;
+#endif
+	}
+
+#if defined(CONFIG_NET_IPV6) && !defined(CONFIG_NET_IPV4)
+	/* Could be hostname, try DNS if configured. */
+	ret = try_resolve(ctx, peer_addr_str, DNS_QUERY_TYPE_AAAA, timeout);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ctx->default_ctx = &ctx->ipv6;
+	return 0;
+#endif /* IPV6 && !IPV4 */
+
+#if defined(CONFIG_NET_IPV4) && !defined(CONFIG_NET_IPV6)
+	ret = try_resolve(ctx, peer_addr_str, DNS_QUERY_TYPE_A, timeout);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ctx->default_ctx = &ctx->ipv4;
+	return 0;
+#endif /* IPV6 && !IPV4 */
+
+#if defined(CONFIG_NET_IPV4) && defined(CONFIG_NET_IPV6)
+	ret = try_resolve(ctx, peer_addr_str, DNS_QUERY_TYPE_A, timeout);
+	if (ret < 0) {
+		ret = try_resolve(ctx, peer_addr_str, DNS_QUERY_TYPE_AAAA,
+				  timeout);
+		if (ret < 0) {
+			return ret;
+		}
+
+		ctx->default_ctx = &ctx->ipv6;
+		return 0;
+	}
+
+	ctx->default_ctx = &ctx->ipv4;
+	return 0;
+#endif /* IPV4 && IPV6 */
+}
+
 static int get_port_number(const char *peer_addr_str,
 			   char *buf,
 			   size_t buf_len)
@@ -168,132 +257,73 @@ static int get_port_number(const char *peer_addr_str,
 	return 0;
 }
 
-static int set_remote_addr(struct net_app_ctx *ctx,
-			   const char *peer_addr_str,
-			   u16_t peer_port,
-			   s32_t timeout)
+static void close_net_ctx(struct net_app_ctx *ctx)
 {
-	char addr_str[INET6_ADDRSTRLEN + 1];
-	char *addr;
-	int ret;
-
-	/* If the peer string contains port number, use that and ignore
-	 * the port number parameter.
-	 */
-	ret = get_port_number(peer_addr_str, addr_str, sizeof(addr_str));
-	if (ret > 0) {
-		addr = addr_str;
-		peer_port = ret;
-	} else {
-		addr = (char *)peer_addr_str;
+#if defined(CONFIG_NET_IPV6)
+	if (ctx->ipv6.ctx) {
+		net_context_put(ctx->ipv6.ctx);
+		ctx->ipv6.ctx = NULL;
 	}
-
-#if defined(CONFIG_NET_IPV6) && !defined(CONFIG_NET_IPV4)
-	ret = net_addr_pton(AF_INET6, addr,
-			    &net_sin6(&ctx->ipv6.remote)->sin6_addr);
-	if (ret < 0) {
-		/* Could be hostname, try DNS if configured. */
-#if !defined(CONFIG_DNS_RESOLVER)
-		NET_ERR("Invalid IPv6 address %s", addr);
-		return -EINVAL;
-#else
-		ret = resolve_name(ctx, addr, DNS_QUERY_TYPE_AAAA, timeout);
-		if (ret < 0) {
-			NET_ERR("Cannot resolve %s (%d)", addr, ret);
-			return ret;
-		}
 #endif
+#if defined(CONFIG_NET_IPV4)
+	if (ctx->ipv4.ctx) {
+		net_context_put(ctx->ipv4.ctx);
+		ctx->ipv4.ctx = NULL;
 	}
-
-	net_sin6(&ctx->ipv6.remote)->sin6_port = htons(peer_port);
-	net_sin6(&ctx->ipv6.remote)->sin6_family = AF_INET6;
-	ctx->ipv6.remote.sa_family = AF_INET6;
-	ctx->default_ctx = &ctx->ipv6;
-#endif /* IPV6 && !IPV4 */
-
-#if defined(CONFIG_NET_IPV4) && !defined(CONFIG_NET_IPV6)
-	ret = net_addr_pton(AF_INET, addr,
-			    &net_sin(&ctx->ipv4.remote)->sin_addr);
-	if (ret < 0) {
-		/* Could be hostname, try DNS if configured. */
-#if !defined(CONFIG_DNS_RESOLVER)
-		NET_ERR("Invalid IPv4 address %s", addr);
-		return -EINVAL;
-#else
-		ret = resolve_name(ctx, addr, DNS_QUERY_TYPE_A, timeout);
-		if (ret < 0) {
-			NET_ERR("Cannot resolve %s (%d)", addr, ret);
-			return ret;
-		}
 #endif
-	}
+#if defined(CONFIG_NET_APP_SERVER) && defined(CONFIG_NET_TCP)
+	{
+		int i;
 
-	net_sin(&ctx->ipv4.remote)->sin_port = htons(peer_port);
-	net_sin(&ctx->ipv4.remote)->sin_family = AF_INET;
-	ctx->ipv4.remote.sa_family = AF_INET;
-	ctx->default_ctx = &ctx->ipv4;
-#endif /* IPV6 && !IPV4 */
-
-#if defined(CONFIG_NET_IPV4) && defined(CONFIG_NET_IPV6)
-	ret = net_addr_pton(AF_INET, addr,
-			    &net_sin(&ctx->ipv4.remote)->sin_addr);
-	if (ret < 0) {
-		ret = net_addr_pton(AF_INET6, addr,
-				    &net_sin6(&ctx->ipv6.remote)->sin6_addr);
-		if (ret < 0) {
-			/* Could be hostname, try DNS if configured. */
-#if !defined(CONFIG_DNS_RESOLVER)
-			NET_ERR("Invalid IPv4 or IPv6 address %s", addr);
-			return -EINVAL;
-#else
-			ret = resolve_name(ctx, addr,
-					   DNS_QUERY_TYPE_A, timeout);
-			if (ret < 0) {
-				ret = resolve_name(ctx, addr,
-						   DNS_QUERY_TYPE_AAAA,
-						   timeout);
-				if (ret < 0) {
-					NET_ERR("Cannot resolve %s (%d)",
-						addr, ret);
-					return ret;
-				}
-
-				goto ipv6;
+		for (i = 0; i < CONFIG_NET_APP_SERVER_NUM_CONN; i++) {
+			if (ctx->server.net_ctxs[i]) {
+				net_context_put(ctx->server.net_ctxs[i]);
+				ctx->server.net_ctxs[i] = NULL;
 			}
-
-			goto ipv4;
-#endif /* !CONFIG_DNS_RESOLVER */
-		} else {
-#if defined(CONFIG_DNS_RESOLVER)
-		ipv6:
-#endif
-			net_sin6(&ctx->ipv6.remote)->sin6_port =
-				htons(peer_port);
-			net_sin6(&ctx->ipv6.remote)->sin6_family = AF_INET6;
-			ctx->ipv6.remote.sa_family = AF_INET6;
-			ctx->default_ctx = &ctx->ipv6;
 		}
-	} else {
-#if defined(CONFIG_DNS_RESOLVER)
-	ipv4:
+	}
 #endif
-		net_sin(&ctx->ipv4.remote)->sin_port = htons(peer_port);
-		net_sin(&ctx->ipv4.remote)->sin_family = AF_INET;
-		ctx->ipv4.remote.sa_family = AF_INET;
-		ctx->default_ctx = &ctx->ipv4;
-	}
-#endif /* IPV4 && IPV6 */
+}
 
-	/* If we have not yet figured out what is the protocol family,
-	 * then we cannot continue.
-	 */
-	if (!ctx->default_ctx ||
-	    ctx->default_ctx->remote.sa_family == AF_UNSPEC) {
-		NET_ERR("Unknown protocol family.");
-		return -EPFNOSUPPORT;
-	}
+static int bind_local(struct net_app_ctx *ctx)
+{
+	int ret = 0;
 
-	return 0;
+#if defined(CONFIG_NET_IPV4)
+	if (ctx->ipv4.remote.sa_family == AF_INET && ctx->ipv4.ctx) {
+		ctx->ipv4.local.sa_family = AF_INET;
+		_net_app_set_local_addr(ctx, &ctx->ipv4.local, NULL,
+				ntohs(net_sin(&ctx->ipv4.local)->sin_port));
+
+		ret = _net_app_set_net_ctx(ctx, ctx->ipv4.ctx,
+					   &ctx->ipv4.local,
+					   sizeof(struct sockaddr_in),
+					   ctx->proto);
+		if (ret < 0) {
+			net_context_put(ctx->ipv4.ctx);
+			ctx->ipv4.ctx = NULL;
+		}
+	}
+#endif
+
+#if defined(CONFIG_NET_IPV6)
+	if (ctx->ipv6.remote.sa_family == AF_INET6 && ctx->ipv6.ctx) {
+		ctx->ipv6.local.sa_family = AF_INET6;
+		_net_app_set_local_addr(ctx, &ctx->ipv6.local, NULL,
+				ntohs(net_sin6(&ctx->ipv6.local)->sin6_port));
+
+		ret = _net_app_set_net_ctx(ctx, ctx->ipv6.ctx,
+					   &ctx->ipv6.local,
+					   sizeof(struct sockaddr_in6),
+					   ctx->proto);
+		if (ret < 0) {
+			net_context_put(ctx->ipv6.ctx);
+			ctx->ipv6.ctx = NULL;
+		}
+	}
+#endif
+
+	return ret;
 }
 
 int net_app_init_client(struct net_app_ctx *ctx,
@@ -306,8 +336,11 @@ int net_app_init_client(struct net_app_ctx *ctx,
 			s32_t timeout,
 			void *user_data)
 {
+	const char *base_peer_addr = peer_addr_str;
+	char base_addr_str[INET6_ADDRSTRLEN + 1];
+	struct sockaddr remote_addr;
 	struct sockaddr addr;
-	int ret;
+	int ret, addr_ok = false;
 
 	if (!ctx) {
 		return -EINVAL;
@@ -318,11 +351,73 @@ int net_app_init_client(struct net_app_ctx *ctx,
 	}
 
 	memset(&addr, 0, sizeof(addr));
+	memset(&remote_addr, 0, sizeof(remote_addr));
+
+	if (peer_addr) {
+		memcpy(&remote_addr, peer_addr, sizeof(remote_addr));
+	} else if (peer_addr_str) {
+		/* If the peer string contains port number, use that and
+		 * ignore the port number parameter.
+		 */
+		ret = get_port_number(peer_addr_str, base_addr_str,
+				      sizeof(base_addr_str));
+		if (ret > 0) {
+			base_peer_addr = base_addr_str;
+			peer_port = ret;
+		} else {
+			strncpy(base_addr_str, peer_addr_str,
+				sizeof(base_addr_str) - 1);
+		}
+
+		addr_ok = net_ipaddr_parse(base_peer_addr,
+					   strlen(base_peer_addr),
+					   &remote_addr);
+
+		/* The remote_addr will be used by set_remote_addr() to
+		 * set the actual peer address.
+		 */
+	}
 
 	if (client_addr) {
-		memcpy(&addr, client_addr, sizeof(addr));
+		u16_t local_port = 0;
+		bool empty_addr = false;
+
+		addr.sa_family = remote_addr.sa_family;
+
+		/* local_port is used if the IP address isn't specified */
+#if defined(CONFIG_NET_IPV4)
+		if (client_addr->sa_family == AF_INET) {
+			empty_addr = net_is_ipv4_addr_unspecified(
+					&net_sin(client_addr)->sin_addr);
+			local_port = net_sin(client_addr)->sin_port;
+		}
+#endif
+
+#if defined(CONFIG_NET_IPV6)
+		if (client_addr->sa_family == AF_INET6) {
+			empty_addr = net_is_ipv6_addr_unspecified(
+					&net_sin6(client_addr)->sin6_addr);
+			local_port = net_sin6(client_addr)->sin6_port;
+		}
+#endif
+
+		if (empty_addr) {
+			if (remote_addr.sa_family == AF_INET6) {
+				net_sin6(&addr)->sin6_port = local_port;
+			} else {
+				net_sin(&addr)->sin_port = local_port;
+			}
+		} else {
+			memcpy(&addr, client_addr, sizeof(addr));
+
+			if (addr.sa_family != remote_addr.sa_family) {
+				NET_DBG("Address family mismatch %d vs %d",
+					addr.sa_family, remote_addr.sa_family);
+				return -EINVAL;
+			}
+		}
 	} else {
-		addr.sa_family = AF_UNSPEC;
+		addr.sa_family = remote_addr.sa_family;
 	}
 
 	ctx->app_type = NET_APP_CLIENT;
@@ -331,9 +426,11 @@ int net_app_init_client(struct net_app_ctx *ctx,
 	ctx->recv_cb = _net_app_received;
 	ctx->proto = proto;
 	ctx->sock_type = sock_type;
+	ctx->is_enabled = true;
 
 	ret = _net_app_config_local_ctx(ctx, sock_type, proto, &addr);
 	if (ret < 0) {
+		close_net_ctx(ctx);
 		goto fail;
 	}
 
@@ -362,47 +459,46 @@ int net_app_init_client(struct net_app_ctx *ctx,
 	if (!peer_addr_str) {
 		NET_ERR("Cannot know where to connect.");
 		ret = -EINVAL;
+		close_net_ctx(ctx);
 		goto fail;
 	}
 
-	ret = set_remote_addr(ctx, peer_addr_str, peer_port, timeout);
+	ret = set_remote_addr(ctx, &remote_addr, base_addr_str,
+			      addr_ok, timeout);
+	if (ret < 0) {
+		close_net_ctx(ctx);
+		goto fail;
+	}
+
+	/* If we have not yet figured out what is the protocol family,
+	 * then we cannot continue.
+	 */
+	if (!ctx->default_ctx ||
+	    ctx->default_ctx->remote.sa_family == AF_UNSPEC) {
+		NET_ERR("Unknown protocol family.");
+		return -EPFNOSUPPORT;
+	}
+
+	/* Set the port now that we know the sa_family */
+	if (!peer_addr) {
+#if defined(CONFIG_NET_IPV6)
+		if (ctx->default_ctx->remote.sa_family == AF_INET6) {
+			net_sin6(&ctx->default_ctx->remote)->sin6_port =
+				htons(peer_port);
+		}
+#endif
+#if defined(CONFIG_NET_IPV4)
+		if (ctx->default_ctx->remote.sa_family == AF_INET) {
+			net_sin(&ctx->default_ctx->remote)->sin_port =
+				htons(peer_port);
+		}
+#endif
+	}
+
+	ret = bind_local(ctx);
 	if (ret < 0) {
 		goto fail;
 	}
-
-#if defined(CONFIG_NET_IPV4)
-	if (ctx->ipv4.remote.sa_family == AF_INET) {
-		ctx->ipv4.local.sa_family = AF_INET;
-		_net_app_set_local_addr(&ctx->ipv4.local, NULL,
-					net_sin(&ctx->ipv4.local)->sin_port);
-
-		ret = _net_app_set_net_ctx(ctx, ctx->ipv4.ctx,
-					   &ctx->ipv4.local,
-					   sizeof(struct sockaddr_in),
-					   ctx->proto);
-		if (ret < 0) {
-			net_context_put(ctx->ipv4.ctx);
-			ctx->ipv4.ctx = NULL;
-		}
-	}
-#endif
-
-#if defined(CONFIG_NET_IPV6)
-	if (ctx->ipv6.remote.sa_family == AF_INET6) {
-		ctx->ipv6.local.sa_family = AF_INET6;
-		_net_app_set_local_addr(&ctx->ipv6.local, NULL,
-				       net_sin6(&ctx->ipv6.local)->sin6_port);
-
-		ret = _net_app_set_net_ctx(ctx, ctx->ipv6.ctx,
-					   &ctx->ipv6.local,
-					   sizeof(struct sockaddr_in6),
-					   ctx->proto);
-		if (ret < 0) {
-			net_context_put(ctx->ipv6.ctx);
-			ctx->ipv6.ctx = NULL;
-		}
-	}
-#endif
 
 	_net_app_print_info(ctx);
 
@@ -421,6 +517,7 @@ static void _app_connected(struct net_context *net_ctx,
 			   void *user_data)
 {
 	struct net_app_ctx *ctx = user_data;
+	int ret;
 
 #if defined(CONFIG_NET_APP_TLS) || defined(CONFIG_NET_APP_DTLS)
 	if (ctx->is_tls) {
@@ -428,7 +525,10 @@ static void _app_connected(struct net_context *net_ctx,
 	}
 #endif
 
-	net_context_recv(net_ctx, ctx->recv_cb, K_NO_WAIT, ctx);
+	ret = net_context_recv(net_ctx, ctx->recv_cb, K_NO_WAIT, ctx);
+	if (ret < 0) {
+		NET_DBG("Cannot set recv_cb (%d)", ret);
+	}
 
 #if defined(CONFIG_NET_APP_TLS) || defined(CONFIG_NET_APP_DTLS)
 	if (ctx->is_tls) {
@@ -530,6 +630,55 @@ out:
 }
 #endif /* CONFIG_NET_APP_DTLS */
 
+static void check_local_address(struct net_app_ctx *ctx,
+				struct net_context *net_ctx)
+{
+#if defined(CONFIG_NET_IPV6)
+	if (net_context_get_family(net_ctx) == AF_INET6) {
+		const struct in6_addr *laddr;
+		struct in6_addr *raddr;
+
+		laddr = &net_sin6(&ctx->ipv6.local)->sin6_addr;
+		if (!net_is_ipv6_addr_unspecified(laddr)) {
+			return;
+		}
+
+		raddr = &net_sin6(&ctx->ipv6.remote)->sin6_addr;
+
+		laddr = net_if_ipv6_select_src_addr(NULL, raddr);
+		if (laddr && laddr != net_ipv6_unspecified_address()) {
+			net_ipaddr_copy(&net_sin6(&ctx->ipv6.local)->sin6_addr,
+					laddr);
+		} else {
+			NET_WARN("Source address is unspecified!");
+		}
+	}
+#endif
+
+#if defined(CONFIG_NET_IPV4)
+	if (net_context_get_family(net_ctx) == AF_INET) {
+		struct in_addr *laddr;
+		struct net_if *iface;
+
+		laddr = &net_sin(&ctx->ipv4.local)->sin_addr;
+		if (!net_is_ipv4_addr_unspecified(laddr)) {
+			return;
+		}
+
+		/* Just take the first IPv4 address of an interface */
+		iface = net_context_get_iface(net_ctx);
+		if (iface) {
+			laddr =
+			    &iface->config.ip.ipv4->unicast[0].address.in_addr;
+			net_ipaddr_copy(&net_sin(&ctx->ipv4.local)->sin_addr,
+					laddr);
+		} else {
+			NET_WARN("Source address is unspecified!");
+		}
+	}
+#endif
+}
+
 int net_app_connect(struct net_app_ctx *ctx, s32_t timeout)
 {
 	struct net_context *net_ctx;
@@ -549,8 +698,36 @@ int net_app_connect(struct net_app_ctx *ctx, s32_t timeout)
 	}
 
 	net_ctx = _net_app_select_net_ctx(ctx, NULL);
-	if (!net_ctx) {
+	if (!net_ctx && ctx->is_enabled) {
 		return -EAFNOSUPPORT;
+	}
+
+	if (!ctx->is_enabled) {
+		ret = _net_app_config_local_ctx(ctx, ctx->sock_type,
+						ctx->proto, NULL);
+		if (ret < 0) {
+			NET_DBG("Cannot get local endpoint (%d)", ret);
+			return -EINVAL;
+		}
+
+		net_ctx = _net_app_select_net_ctx(ctx, NULL);
+
+		NET_DBG("Re-conncting to net_ctx %p", net_ctx);
+
+		ret = bind_local(ctx);
+		if (ret < 0) {
+			NET_DBG("Cannot bind local endpoint (%d)", ret);
+			return -EINVAL;
+		}
+
+		ctx->is_enabled = true;
+
+		_net_app_print_info(ctx);
+	} else {
+		/* We cannot bind to local unspecified address when sending.
+		 * Select proper address depending on remote one in this case.
+		 */
+		check_local_address(ctx, net_ctx);
 	}
 
 #if defined(CONFIG_NET_APP_TLS) || defined(CONFIG_NET_APP_DTLS)
@@ -634,15 +811,32 @@ static void tls_client_handler(struct net_app_ctx *ctx,
 
 	k_sem_give(startup_sync);
 
-	/* We wait until TLS connection is established */
-	k_sem_take(&ctx->client.connect_wait, K_FOREVER);
+	while (1) {
+		/* We wait until TLS connection is established */
+		k_sem_take(&ctx->client.connect_wait, K_FOREVER);
 
-	ret = _net_app_ssl_mainloop(ctx);
-	if (ret < 0) {
-		NET_ERR("TLS mainloop startup failed (%d)", ret);
+		ret = _net_app_ssl_mainloop(ctx);
+		if (ctx->tls.connection_closing) {
+			mbedtls_ssl_close_notify(&ctx->tls.mbedtls.ssl);
+
+			if (ctx->cb.close) {
+				ctx->cb.close(ctx, -ESHUTDOWN, ctx->user_data);
+			}
+
+			ctx->tls.connection_closing = false;
+			ctx->is_enabled = false;
+
+			/* Wait more connection requests from user */
+			continue;
+		}
+
+		if (ret < 0) {
+			NET_ERR("TLS mainloop startup failed (%d)", ret);
+			break;
+		}
 	}
 
-	mbedtls_ssl_close_notify(&ctx->tls.mbedtls.ssl);
+	NET_DBG("Shutting down TLS handler");
 
 	/* If there is any pending data that have not been processed
 	 * yet, we need to free it here.
@@ -696,7 +890,7 @@ int net_app_client_tls(struct net_app_ctx *ctx,
 		       const char *cert_host,
 		       net_app_entropy_src_cb_t entropy_src_cb,
 		       struct k_mem_pool *pool,
-		       k_thread_stack_t stack,
+		       k_thread_stack_t *stack,
 		       size_t stack_size)
 {
 	if (!request_buf || request_buf_len == 0) {

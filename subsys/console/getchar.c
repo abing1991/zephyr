@@ -11,11 +11,11 @@
 #include <drivers/console/console.h>
 #include <drivers/console/uart_console.h>
 
-#if CONFIG_CONSOLE_GETCHAR_BUFSIZE & (CONFIG_CONSOLE_GETCHAR_BUFSIZE - 1) != 0
+#if (CONFIG_CONSOLE_GETCHAR_BUFSIZE & (CONFIG_CONSOLE_GETCHAR_BUFSIZE - 1)) != 0
 #error CONFIG_CONSOLE_GETCHAR_BUFSIZE must be power of 2
 #endif
 
-#if CONFIG_CONSOLE_PUTCHAR_BUFSIZE & (CONFIG_CONSOLE_PUTCHAR_BUFSIZE - 1) != 0
+#if (CONFIG_CONSOLE_PUTCHAR_BUFSIZE & (CONFIG_CONSOLE_PUTCHAR_BUFSIZE - 1)) != 0
 #error CONFIG_CONSOLE_PUTCHAR_BUFSIZE must be power of 2
 #endif
 
@@ -23,7 +23,6 @@ static K_SEM_DEFINE(uart_sem, 0, UINT_MAX);
 static u8_t uart_ringbuf[CONFIG_CONSOLE_GETCHAR_BUFSIZE];
 static u8_t i_get, i_put;
 
-static K_SEM_DEFINE(tx_sem, 0, UINT_MAX);
 static u8_t tx_ringbuf[CONFIG_CONSOLE_PUTCHAR_BUFSIZE];
 static u8_t tx_get, tx_put;
 

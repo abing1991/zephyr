@@ -12,24 +12,8 @@ config SOC_SERIES
 config X86_IAMCU
         def_bool y
 
-config TOOLCHAIN_VARIANT
-        default "iamcu" if X86_IAMCU
-        default "" if !X86_IAMCU
-
 config SYS_CLOCK_HW_CYCLES_PER_SEC
 	default 32000000
-
-if !HAS_DTS
-config PHYS_LOAD_ADDR
-	default 0x00180000 if XIP
-	default 0x00280000 if !XIP
-endif
-
-config RAM_SIZE
-	default 8
-
-config ROM_SIZE
-	default 32
 
 config IDT_NUM_VECTORS
 	default 64
@@ -42,13 +26,6 @@ config LOAPIC_TIMER_IRQ
 
 config LOAPIC_TIMER_IRQ_PRIORITY
 	default 2
-
-if !HAS_DTS
-config PHYS_RAM_ADDR
-	default 0x00280000
-	help
-	This option specifies the physical SRAM address of this Soc.
-endif
 
 config QMSI
 	def_bool y
@@ -65,10 +42,12 @@ if UART_QMSI
 config UART_QMSI_0
 	def_bool y
 config UART_QMSI_0_IRQ_PRI
+	int
 	default 0
 config UART_QMSI_1
 	def_bool y
 config UART_QMSI_1_IRQ_PRI
+	int
 	default 0
 endif # UART_QMSI
 
@@ -85,6 +64,7 @@ config RTC_QMSI
 	def_bool y
 
 config RTC_0_IRQ_PRI
+	int
 	default 0
 
 endif # RTC
@@ -96,6 +76,7 @@ config GPIO_QMSI
 config GPIO_QMSI_0
 	def_bool y
 config GPIO_QMSI_0_IRQ_PRI
+	int
 	default 0
 
 endif # GPIO
@@ -112,10 +93,9 @@ config I2C_QMSI
 if I2C_QMSI
 config I2C_0
 	def_bool y
+
 config I2C_0_IRQ_PRI
 	default 0
-config I2C_0_DEFAULT_CFG
-	default 0x12
 endif # I2C_QMSI
 
 config I2C_SDA_SETUP
@@ -155,8 +135,10 @@ config DMA_QMSI
 endif
 
 if SPI
-config SPI_QMSI
+config SPI_DW
 	def_bool y
+config SPI_DW_FIFO_DEPTH
+	default 7
 config SPI_0
 	def_bool y
 config SPI_0_IRQ_PRI

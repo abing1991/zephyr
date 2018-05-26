@@ -352,8 +352,6 @@ static void filter_wl_update(void)
 	u8_t i;
 
 	/* Populate filter from wl peers */
-	filter_clear(&wl_filter);
-
 	for (i = 0; i < WL_SIZE; i++) {
 		u8_t j;
 
@@ -375,9 +373,7 @@ static void filter_rl_update(void)
 {
 	u8_t i;
 
-	/* No whitelist: populate filter from rl peers */
-	filter_clear(&rl_filter);
-
+	/* Populate filter from rl peers */
 	for (i = 0; i < CONFIG_BT_CTLR_RL_SIZE; i++) {
 		if (rl[i].taken) {
 			filter_insert(&rl_filter, i, rl[i].id_addr_type,
@@ -388,13 +384,19 @@ static void filter_rl_update(void)
 
 void ll_filters_adv_update(u8_t adv_fp)
 {
+	/* Clear before populating filter */
+	filter_clear(&wl_filter);
+
 	/* enabling advertising */
 	if (adv_fp && !(radio_scan_filter_pol_get() & 0x1)) {
 		/* whitelist not in use, update whitelist */
 		filter_wl_update();
 	}
 
-	if (rl_enable && !radio_scan_is_enabled()) {
+	/* Clear before populating rl filter */
+	filter_clear(&rl_filter);
+
+	if (rl_enable && !ll_scan_is_enabled()) {
 		/* rl not in use, update resolving list LUT */
 		filter_rl_update();
 	}
@@ -402,13 +404,19 @@ void ll_filters_adv_update(u8_t adv_fp)
 
 void ll_filters_scan_update(u8_t scan_fp)
 {
+	/* Clear before populating filter */
+	filter_clear(&wl_filter);
+
 	/* enabling advertising */
 	if ((scan_fp & 0x1) && !radio_adv_filter_pol_get()) {
 		/* whitelist not in use, update whitelist */
 		filter_wl_update();
 	}
 
-	if (rl_enable && !radio_adv_is_enabled()) {
+	/* Clear before populating rl filter */
+	filter_clear(&rl_filter);
+
+	if (rl_enable && !ll_adv_is_enabled()) {
 		/* rl not in use, update resolving list LUT */
 		filter_rl_update();
 	}
@@ -511,8 +519,8 @@ bool ctrl_rl_enabled(void)
 void ll_rl_pdu_adv_update(u8_t idx, struct pdu_adv *pdu)
 {
 	u8_t *adva = pdu->type == PDU_ADV_TYPE_SCAN_RSP ?
-				  &pdu->payload.scan_rsp.addr[0] :
-				  &pdu->payload.adv_ind.addr[0];
+				  &pdu->scan_rsp.addr[0] :
+				  &pdu->adv_ind.addr[0];
 
 	struct ll_adv_set *ll_adv = ll_adv_set_get();
 
@@ -530,11 +538,11 @@ void ll_rl_pdu_adv_update(u8_t idx, struct pdu_adv *pdu)
 	if (pdu->type == PDU_ADV_TYPE_DIRECT_IND) {
 		if (idx < ARRAY_SIZE(rl) && rl[idx].pirk) {
 			pdu->rx_addr = 1;
-			memcpy(&pdu->payload.direct_ind.tgt_addr[0],
+			memcpy(&pdu->direct_ind.tgt_addr[0],
 			       rl[idx].peer_rpa.val, BDADDR_SIZE);
 		} else {
 			pdu->rx_addr = ll_adv->id_addr_type;
-			memcpy(&pdu->payload.direct_ind.tgt_addr[0],
+			memcpy(&pdu->direct_ind.tgt_addr[0],
 			       ll_adv->id_addr, BDADDR_SIZE);
 		}
 	}
@@ -583,7 +591,7 @@ static void rpa_adv_refresh(void)
 	LL_ASSERT(idx < ARRAY_SIZE(rl));
 	ll_rl_pdu_adv_update(idx, pdu);
 
-	memcpy(&pdu->payload.adv_ind.data[0], &prev->payload.adv_ind.data[0],
+	memcpy(&pdu->adv_ind.data[0], &prev->adv_ind.data[0],
 	       prev->len - BDADDR_SIZE);
 	pdu->len = prev->len;
 
@@ -610,7 +618,7 @@ static int rl_access_check(bool check_ar)
 		}
 	}
 
-	return (radio_adv_is_enabled() || radio_scan_is_enabled()) ? 0 : 1;
+	return (ll_adv_is_enabled() || ll_scan_is_enabled()) ? 0 : 1;
 }
 
 void ll_rl_rpa_update(bool timeout)
@@ -659,7 +667,7 @@ void ll_rl_rpa_update(bool timeout)
 
 	if (timeout) {
 #if defined(CONFIG_BT_BROADCASTER)
-		if (radio_adv_is_enabled()) {
+		if (ll_adv_is_enabled()) {
 			rpa_adv_refresh();
 		}
 #endif

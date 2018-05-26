@@ -1,11 +1,6 @@
+common:
+  depends_on: netif
 tests:
--   test:
-        tags: net
-        filter: not CONFIG_BT
-        min_ram: 12
-        platform_exclude: qemu_xtensa
--   test_with_bt:
-        tags: net
-        filter: CONFIG_BT
-        min_ram: 16
-        platform_exclude: qemu_xtensa
+  net.arp:
+    min_ram: 16
+    tags: net arp

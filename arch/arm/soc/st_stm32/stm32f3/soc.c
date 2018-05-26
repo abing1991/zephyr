@@ -9,23 +9,10 @@
  * @brief System/hardware module for STM32F3 processor
  */
 
-#include <kernel.h>
 #include <device.h>
 #include <init.h>
-#include <soc.h>
 #include <arch/cpu.h>
 #include <cortex_m/exc.h>
-
-/**
- * @brief This function configures the source of stm32cube time base.
- *        Cube HAL expects a 1ms tick which matches with k_uptime_get_32.
- *        Tick interrupt priority is not used
- * @return HAL status
- */
-uint32_t HAL_GetTick(void)
-{
-	return k_uptime_get_32();
-}
 
 /**
  * @brief Perform basic hardware initialization at boot.
@@ -53,8 +40,8 @@ static int stm32f3_init(struct device *arg)
 	irq_unlock(key);
 
 	/* Update CMSIS SystemCoreClock variable (HCLK) */
-	/* At reset, System core clock is set to 4MHz */
-	SystemCoreClock = 4000000;
+	/* At reset, system core clock is set to 8 MHz from HSI */
+	SystemCoreClock = 8000000;
 
 	return 0;
 }

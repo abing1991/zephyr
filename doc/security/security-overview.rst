@@ -119,8 +119,10 @@ The three major security measures currently implemented are:
    the near future.
 
 -  **Execution Protection** including thread separation, stack and
-   memory protection is currently not available in the upstream
-   Zephyr RTOS but is planned for future releases.
+   memory protection is currently available in the upstream
+   Zephyr RTOS starting with version 1.9.0 (stack protection).  Memory
+   protection and thread separation was added in version 1.10.0 for X86.
+   ARM and ARC support is targeted for version 1.11.0.
 
 These topics are discussed in more detail in the following subsections.
 
@@ -149,7 +151,7 @@ Zephyr kernel and all applications are compiled into a single static
 binary. System calls are implemented as function calls without requiring
 context switches. Static linking eliminates the potential for
 dynamically loading malicious code. Memory protection and task
-separation techniques are in scope for future releases.
+separation techniques are in scope starting with version 1.10.0.
 
 Quality Assurance
 =================
@@ -309,7 +311,7 @@ security violations and limit their impact:
    [PAUL09]_.
 
 -  **Least privilege** describes an access model in which each user,
-   program, thread, and fiber shall have the smallest possible
+   program and thread shall have the smallest possible
    subset of permissions in the system required to perform their
    task. This positive security model aims to minimize the attack
    surface of the system.
@@ -405,9 +407,9 @@ The quality assurance part encompasses the following criteria:
    possible.
 
 -  **Automation:** the review process and checks for coding rule
-       adherence are a mandatory part of the pre-commit checks. To
+       adherence are a mandatory part of the precommit checks. To
        ensure consistent application, they shall be automated as part of
-       the pre-commit procedure. Prior to merging large pieces of code
+       the precommit procedure. Prior to merging large pieces of code
        in from subsystems, in addition to review process and coding rule
        adherence, all static code analysis must have been run and issues
        resolved.
@@ -455,7 +457,7 @@ modules in all of its stages and the management of reported security
 issues. Furthermore, threat models need to be created for currently
 known and future attack vectors, and their impact on the system needs to
 be investigated and mitigated. Please refer to the
-`secure coding guidelines`_ outlined in the Zephyr project documentation
+:ref:`secure code` outlined in the Zephyr project documentation
 for detailed information.
 
 The software security process includes:
@@ -589,10 +591,10 @@ following is the current proposal:
    the reporter.
 
 -  All security relevant issues shall trigger an automated notification
-   on the Zephyr security mailing list (security@lists.zephyrproject.org).
-   Any member of the
-   security board can then triage the severity of the issue
-   according to the `Common Vulnerability Scoring System v3.0 <CVSS_>`_
+   on the Zephyr security mailing list
+   (vulnerabilities@zephyrproject.org).  Any member of the security
+   board can then triage the severity of the issue according to the
+   `Common Vulnerability Scoring System v3.0 <CVSS_>`_
 
 -  Depending on the resulting severity score of the issue, the issue is
    prioritized and assigned to the owner of the affected module.
@@ -708,7 +710,7 @@ In general, the steps towards a certification or precertification
    protect the assets against exploits of vulnerabilities of the
    system. As a complete threat model includes the overall product
    including the hardware platform, this might be realized by a
-   split model containing a pre-certified secure branch of Zephyr
+   split model containing a precertified secure branch of Zephyr
    which the vendor could use to certify their Zephyr-enabled
    product.
 
@@ -733,7 +735,7 @@ Certification Options
 For the security certification as such, the following options can be
 pursued:
 
-1. **Abstract (pre-)certification of Zephyr as a pure software system:**
+1. **Abstract precertification of Zephyr as a pure software system:**
    this option requires assumptions on the underlying hardware
    platform and the final application running on top of Zephyr. If
    these assumptions are met by the hardware and the application, a
@@ -785,7 +787,5 @@ See :ref:`security-citations`
 .. _`RFC2119`: https://www.ietf.org/rfc/rfc2119.txt
 .. _`Application Thread Modeling`: https://www.owasp.org/index.php/Application_Threat_Modeling
 .. _`STRIDE`: https://msdn.microsoft.com/en-us/library/ee823878%28v=cs.20%29.aspx
-.. _`Zephyr Kernel subsystem documentation`: https://www.zephyrproject.org/doc/subsystems/subsystems.html
-.. _`secure coding guidelines`: https://www.zephyrproject.org/doc/contribute/security.html
-.. _`development model documentation`: https://wiki.zephyrproject.org/view/Development_Model
+.. _`development model documentation`: https://github.com/zephyrproject-rtos/zephyr/wiki/Development-Model
 .. _`CVSS`: https://www.first.org/cvss/specification-document

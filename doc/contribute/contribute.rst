@@ -10,3 +10,5 @@ patches for code, documentation, tests, and more, directly to the project.
    :maxdepth: 1
 
    contribute_guidelines.rst
+   contribute_non-apache.rst
+   doc-guidelines.rst

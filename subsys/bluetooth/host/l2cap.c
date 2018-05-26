@@ -42,11 +42,13 @@
 #define L2CAP_LE_CID_IS_DYN(_cid) \
 	(_cid >= L2CAP_LE_CID_DYN_START && _cid <= L2CAP_LE_CID_DYN_END)
 
-#define L2CAP_LE_PSM_START	0x0001
-#define L2CAP_LE_PSM_END	0x00ff
+#define L2CAP_LE_PSM_FIXED_START 0x0001
+#define L2CAP_LE_PSM_FIXED_END   0x007f
+#define L2CAP_LE_PSM_DYN_START   0x0080
+#define L2CAP_LE_PSM_DYN_END     0x00ff
 
 #define L2CAP_CONN_TIMEOUT	K_SECONDS(40)
-#define L2CAP_DISC_TIMEOUT	K_SECONDS(1)
+#define L2CAP_DISC_TIMEOUT	K_SECONDS(2)
 
 static sys_slist_t le_channels;
 
@@ -589,9 +591,38 @@ static struct bt_l2cap_server *l2cap_server_lookup_psm(u16_t psm)
 
 int bt_l2cap_server_register(struct bt_l2cap_server *server)
 {
-	if (server->psm < L2CAP_LE_PSM_START ||
-	    server->psm > L2CAP_LE_PSM_END || !server->accept) {
+	if (!server->accept) {
 		return -EINVAL;
+	}
+
+	if (server->psm) {
+		if (server->psm < L2CAP_LE_PSM_FIXED_START ||
+		    server->psm > L2CAP_LE_PSM_DYN_END) {
+			return -EINVAL;
+		}
+
+		/* Check if given PSM is already in use */
+		if (l2cap_server_lookup_psm(server->psm)) {
+			BT_DBG("PSM already registered");
+			return -EADDRINUSE;
+		}
+	} else {
+		u16_t psm;
+
+		for (psm = L2CAP_LE_PSM_DYN_START;
+		     psm <= L2CAP_LE_PSM_DYN_END; psm++) {
+			if (!l2cap_server_lookup_psm(psm)) {
+				break;
+			}
+		}
+
+		if (psm > L2CAP_LE_PSM_DYN_END) {
+			BT_WARN("No free dynamic PSMs available");
+			return -EADDRNOTAVAIL;
+		}
+
+		BT_DBG("Allocated PSM 0x%04x for new server", psm);
+		server->psm = psm;
 	}
 
 	if (server->sec_level > BT_SECURITY_FIPS) {
@@ -599,12 +630,6 @@ int bt_l2cap_server_register(struct bt_l2cap_server *server)
 	} else if (server->sec_level < BT_SECURITY_LOW) {
 		/* Level 0 is only applicable for BR/EDR */
 		server->sec_level = BT_SECURITY_LOW;
-	}
-
-	/* Check if given PSM is already in use */
-	if (l2cap_server_lookup_psm(server->psm)) {
-		BT_DBG("PSM already registered");
-		return -EADDRINUSE;
 	}
 
 	BT_DBG("PSM 0x%04x", server->psm);
@@ -635,7 +660,10 @@ static void l2cap_chan_rx_init(struct bt_l2cap_le_chan *chan)
 		}
 	}
 
-	chan->rx.mps = L2CAP_MAX_LE_MPS;
+	/* MPS shall not be bigger than MTU + 2 as the remaining bytes cannot
+	 * be used.
+	 */
+	chan->rx.mps = min(chan->rx.mtu + 2, L2CAP_MAX_LE_MPS);
 	k_sem_init(&chan->rx.credits, 0, UINT_MAX);
 }
 
@@ -995,13 +1023,10 @@ static inline struct net_buf *l2cap_alloc_seg(struct net_buf *buf)
 	struct net_buf *seg;
 
 	/* Try to use original pool if possible */
-	if (pool->user_data_size >= BT_BUF_USER_DATA_MIN &&
-	    pool->buf_size >= BT_L2CAP_BUF_SIZE(L2CAP_MAX_LE_MPS)) {
-		seg = net_buf_alloc(pool, K_NO_WAIT);
-		if (seg) {
-			net_buf_reserve(seg, BT_L2CAP_CHAN_SEND_RESERVE);
-			return seg;
-		}
+	seg = net_buf_alloc(pool, K_NO_WAIT);
+	if (seg) {
+		net_buf_reserve(seg, BT_L2CAP_CHAN_SEND_RESERVE);
+		return seg;
 	}
 
 	/* Fallback to using global connection tx pool */
@@ -1012,20 +1037,12 @@ static struct net_buf *l2cap_chan_create_seg(struct bt_l2cap_le_chan *ch,
 					     struct net_buf *buf,
 					     size_t sdu_hdr_len)
 {
-	struct net_buf_pool *pool = net_buf_pool_get(buf->pool_id);
 	struct net_buf *seg;
 	u16_t headroom;
 	u16_t len;
 
 	/* Segment if data (+ data headroom) is bigger than MPS */
 	if (buf->len + sdu_hdr_len > ch->tx.mps) {
-		goto segment;
-	}
-
-	/* Segment if there is no space in the user_data */
-	if (pool->user_data_size < BT_BUF_USER_DATA_MIN) {
-		BT_WARN("Too small buffer user_data_size %u",
-			pool->user_data_size);
 		goto segment;
 	}
 
@@ -1576,7 +1593,7 @@ void bt_l2cap_init(void)
 static int l2cap_le_connect(struct bt_conn *conn, struct bt_l2cap_le_chan *ch,
 			    u16_t psm)
 {
-	if (psm < L2CAP_LE_PSM_START || psm > L2CAP_LE_PSM_END) {
+	if (psm < L2CAP_LE_PSM_FIXED_START || psm > L2CAP_LE_PSM_DYN_END) {
 		return -EINVAL;
 	}
 

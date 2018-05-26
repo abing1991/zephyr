@@ -55,7 +55,7 @@ static struct net_icmpv6_handler test_handler2 = {
 	.handler = handle_test_msg,
 };
 
-void run_tests(void)
+void test_icmpv6(void)
 {
 	k_thread_priority_set(k_current_get(), K_PRIO_COOP(7));
 
@@ -67,7 +67,10 @@ void run_tests(void)
 	net_icmpv6_register_handler(&test_handler2);
 
 	pkt = net_pkt_get_reserve(&pkts_slab, 0, K_FOREVER);
+	zassert_true(pkt != NULL, "Could get net_pkt from slab");
+
 	frag = net_buf_alloc(&data_pool, K_FOREVER);
+	zassert_true(frag != NULL, "Could not allocate buffer from pool");
 
 	net_pkt_frag_add(pkt, frag);
 
@@ -108,6 +111,6 @@ void run_tests(void)
 void test_main(void)
 {
 	ztest_test_suite(test_icmpv6_fn,
-		ztest_unit_test(run_tests));
+		ztest_unit_test(test_icmpv6));
 	ztest_run_test_suite(test_icmpv6_fn);
 }

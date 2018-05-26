@@ -41,15 +41,13 @@
  *
  * @param reason the reason that the handler was called
  * @param pEsf pointer to the exception stack frame
+ *
+ * @return This function does not return.
  */
 void _NanoFatalErrorHandler(unsigned int reason,
 					  const NANO_ESF *pEsf)
 {
 	switch (reason) {
-	case _NANO_ERR_INVALID_TASK_EXIT:
-		printk("***** Invalid Exit Software Error! *****\n");
-		break;
-
 #if defined(CONFIG_STACK_CANARIES) || defined(CONFIG_STACK_SENTINEL)
 	case _NANO_ERR_STACK_CHK_FAIL:
 		printk("***** Stack Check Fail! *****\n");
@@ -90,4 +88,15 @@ void _NanoFatalErrorHandler(unsigned int reason,
 void _do_kernel_oops(const NANO_ESF *esf)
 {
 	_NanoFatalErrorHandler(esf->r0, esf);
+}
+
+FUNC_NORETURN void _arch_syscall_oops(void *ssf_ptr)
+{
+	u32_t *ssf_contents = ssf_ptr;
+	NANO_ESF oops_esf = { 0 };
+
+	oops_esf.pc = ssf_contents[3];
+
+	_do_kernel_oops(&oops_esf);
+	CODE_UNREACHABLE;
 }

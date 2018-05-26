@@ -19,6 +19,7 @@
 extern "C" {
 #endif
 
+#include <generated_dts_board.h>
 #if !defined(_ASMLANGUAGE) && !defined(__ASSEMBLER__)
 #include "sys_io.h" /* Include from the very same folder of this file */
 #include <zephyr/types.h>
@@ -31,7 +32,6 @@ extern "C" {
 #define SIZEOFUNIT_TO_OCTET(X) (X)
 
 #define _NANO_ERR_HW_EXCEPTION (0)      /* MPU/Bus/Usage fault */
-#define _NANO_ERR_INVALID_TASK_EXIT (1) /* Invalid task exit */
 #define _NANO_ERR_STACK_CHK_FAIL (2)    /* Stack corruption detected */
 #define _NANO_ERR_ALLOCATION_FAIL (3)   /* Kernel Allocation Failure */
 #define _NANO_ERR_RESERVED_IRQ (4)	/* Reserved interrupt */
@@ -121,11 +121,17 @@ extern void _irq_priority_set(u32_t irq, u32_t prio, u32_t flags);
 /* Spurious interrupt handler. Throws an error if called */
 extern void _irq_spurious(void *unused);
 
-FUNC_NORETURN void _SysFatalErrorHandler(unsigned int reason,
-					 const NANO_ESF *esf);
+#ifdef CONFIG_XTENSA_ASM2
+#define XTENSA_ERR_NORET /**/
+#else
+#define XTENSA_ERR_NORET FUNC_NORETURN
+#endif
 
-FUNC_NORETURN void _NanoFatalErrorHandler(unsigned int reason,
-					  const NANO_ESF *pEsf);
+XTENSA_ERR_NORET void _SysFatalErrorHandler(unsigned int reason,
+					    const NANO_ESF *esf);
+
+XTENSA_ERR_NORET void _NanoFatalErrorHandler(unsigned int reason,
+					     const NANO_ESF *pEsf);
 
 extern u32_t _timer_cycle_get_32(void);
 #define _arch_k_cycle_get_32()	_timer_cycle_get_32()

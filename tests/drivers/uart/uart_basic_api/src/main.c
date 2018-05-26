@@ -11,13 +11,25 @@
  * @}
  */
 
-#include <test_uart.h>
+#include "test_uart.h"
 
 #ifdef CONFIG_CONSOLE_SHELL
 TC_CMD_DEFINE(test_uart_fifo_read)
 TC_CMD_DEFINE(test_uart_fifo_fill)
 TC_CMD_DEFINE(test_uart_poll_in)
 TC_CMD_DEFINE(test_uart_poll_out)
+#endif
+
+#ifndef CONFIG_UART_INTERRUPT_DRIVEN
+void test_uart_fifo_fill(void)
+{
+	ztest_test_skip();
+}
+
+void test_uart_fifo_read(void)
+{
+	ztest_test_skip();
+}
 #endif
 
 void test_main(void)
@@ -36,6 +48,8 @@ void test_main(void)
 #else
 	ztest_test_suite(uart_basic_test,
 			 ztest_unit_test(test_uart_fifo_fill),
+			 ztest_unit_test(test_uart_fifo_read),
+			 ztest_unit_test(test_uart_poll_in),
 			 ztest_unit_test(test_uart_poll_out));
 	ztest_run_test_suite(uart_basic_test);
 #endif

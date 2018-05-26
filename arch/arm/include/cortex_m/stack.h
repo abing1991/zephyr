@@ -14,9 +14,6 @@
 #ifndef _ARM_CORTEXM_STACK__H_
 #define _ARM_CORTEXM_STACK__H_
 
-#include <kernel_structs.h>
-#include <asm_inline.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,6 +23,8 @@ extern "C" {
 /* nothing */
 
 #else
+
+#include "arch/arm/cortex_m/cmsis.h"
 
 extern K_THREAD_STACK_DEFINE(_interrupt_stack, CONFIG_ISR_STACK_SIZE);
 
@@ -40,10 +39,22 @@ extern K_THREAD_STACK_DEFINE(_interrupt_stack, CONFIG_ISR_STACK_SIZE);
  */
 static ALWAYS_INLINE void _InterruptStackSetup(void)
 {
+#ifdef CONFIG_MPU_REQUIRES_POWER_OF_TWO_ALIGNMENT
+	u32_t msp = (u32_t)(K_THREAD_STACK_BUFFER(_interrupt_stack) +
+			    CONFIG_ISR_STACK_SIZE - MPU_GUARD_ALIGN_AND_SIZE);
+#else
 	u32_t msp = (u32_t)(K_THREAD_STACK_BUFFER(_interrupt_stack) +
 			    CONFIG_ISR_STACK_SIZE);
+#endif
 
-	_MspSet(msp);
+	__set_MSP(msp);
+#if defined(CONFIG_BUILTIN_STACK_GUARD)
+#if defined(CONFIG_CPU_CORTEX_M_HAS_SPLIM)
+	__set_MSPLIM((u32_t)_interrupt_stack);
+#else
+#error "Built-in MSP limit checks not supported by HW"
+#endif
+#endif /* CONFIG_BUILTIN_STACK_GUARD */
 }
 
 #endif /* _ASMLANGUAGE */

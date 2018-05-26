@@ -7,7 +7,6 @@
  */
 
 #include <zephyr.h>
-#include <linker/sections.h>
 
 #include <zephyr/types.h>
 #include <stddef.h>
@@ -21,7 +20,7 @@
 #include <net/net_core.h>
 #include <net/net_pkt.h>
 #include <net/net_ip.h>
-#include <net/ethernet.h>
+#include <net/tcp.h>
 
 #include <tc_util.h>
 
@@ -32,7 +31,7 @@
 #define DBG(fmt, ...)
 #endif
 
-#include "tcp.h"
+#include "tcp_internal.h"
 #include "net_private.h"
 
 static bool test_failed;
@@ -44,10 +43,10 @@ static struct net_context *v4_ctx;
 static struct net_context *reply_v4_ctx;
 
 static struct sockaddr_in6 any_addr6;
-static const struct in6_addr in6addr_any = IN6ADDR_ANY_INIT;
+static const struct in6_addr sin6_addr_any = IN6ADDR_ANY_INIT;
 
 static struct sockaddr_in any_addr4;
-static const struct in_addr in4addr_any = { { { 0 } } };
+static const struct in_addr sin_addr_any = INADDR_ANY_INIT;
 
 static struct in6_addr my_v6_inaddr = { { { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
 					  0, 0, 0, 0, 0, 0, 0, 0x2a } } };
@@ -78,41 +77,16 @@ static int accept_cb_called;
 static bool syn_v6_sent;
 
 struct net_tcp_context {
-	u8_t mac_addr[sizeof(struct net_eth_addr)];
-	struct net_linkaddr ll_addr;
 };
 
 int net_tcp_dev_init(struct device *dev)
 {
-	struct net_tcp_context *net_tcp_context = dev->driver_data;
-
-	net_tcp_context = net_tcp_context;
-
 	return 0;
-}
-
-static u8_t *net_tcp_get_mac(struct device *dev)
-{
-	struct net_tcp_context *context = dev->driver_data;
-
-	if (context->mac_addr[2] == 0x00) {
-		/* 00-00-5E-00-53-xx Documentation RFC 7042 */
-		context->mac_addr[0] = 0x00;
-		context->mac_addr[1] = 0x00;
-		context->mac_addr[2] = 0x5E;
-		context->mac_addr[3] = 0x00;
-		context->mac_addr[4] = 0x53;
-		context->mac_addr[5] = sys_rand32_get();
-	}
-
-	return context->mac_addr;
 }
 
 static void net_tcp_iface_init(struct net_if *iface)
 {
-	u8_t *mac = net_tcp_get_mac(net_if_get_device(iface));
-
-	net_if_set_link_addr(iface, mac, 6, NET_LINK_ETHERNET);
+	return;
 }
 
 static void v6_send_syn_ack(struct net_if *iface, struct net_pkt *req)
@@ -145,8 +119,8 @@ static void v6_send_syn_ack(struct net_if *iface, struct net_pkt *req)
 	DBG("rsp dst %s/%d\n", net_sprint_ipv6_addr(&NET_IPV6_HDR(rsp)->dst),
 	    ntohs(NET_TCP_HDR(rsp)->dst_port));
 
-	net_hexdump_frags("request TCPv6", req);
-	net_hexdump_frags("reply   TCPv6", rsp);
+	net_hexdump_frags("request TCPv6", req, false);
+	net_hexdump_frags("reply   TCPv6", rsp, false);
 
 	ret =  net_recv_data(iface, rsp);
 	if (!ret) {
@@ -196,10 +170,13 @@ static inline struct in_addr *if_get_addr(struct net_if *iface)
 	int i;
 
 	for (i = 0; i < NET_IF_MAX_IPV4_ADDR; i++) {
-		if (iface->ipv4.unicast[i].is_used &&
-		    iface->ipv4.unicast[i].address.family == AF_INET &&
-		    iface->ipv4.unicast[i].addr_state == NET_ADDR_PREFERRED) {
-			return &iface->ipv4.unicast[i].address.in_addr;
+		if (iface->config.ip.ipv4->unicast[i].is_used &&
+		    iface->config.ip.ipv4->unicast[i].address.family ==
+								AF_INET &&
+		    iface->config.ip.ipv4->unicast[i].addr_state ==
+							NET_ADDR_PREFERRED) {
+			return
+			    &iface->config.ip.ipv4->unicast[i].address.in_addr;
 		}
 	}
 
@@ -292,7 +269,7 @@ static void setup_ipv4_tcp(struct net_pkt *pkt,
 			   u16_t remote_port,
 			   u16_t local_port)
 {
-	struct net_ipv4_hdr ipv4;
+	struct net_ipv4_hdr ipv4 = {};
 	struct net_tcp_hdr tcp_hdr = { 0 };
 	u8_t data[] = { 'f', 'o', 'o', 'b', 'a', 'r' };
 
@@ -941,7 +918,7 @@ static bool test_create_v6_reset_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv6", pkt);
+	net_hexdump_frags("TCPv6", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -978,7 +955,7 @@ static bool test_create_v4_reset_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv4", pkt);
+	net_hexdump_frags("TCPv4", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -1015,7 +992,7 @@ static bool test_create_v6_syn_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv6", pkt);
+	net_hexdump_frags("TCPv6", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -1052,7 +1029,7 @@ static bool test_create_v4_syn_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv4", pkt);
+	net_hexdump_frags("TCPv4", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -1089,7 +1066,7 @@ static bool test_create_v6_synack_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv6", pkt);
+	net_hexdump_frags("TCPv6", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -1127,7 +1104,7 @@ static bool test_create_v4_synack_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv4", pkt);
+	net_hexdump_frags("TCPv4", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -1165,7 +1142,7 @@ static bool test_create_v6_fin_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv6", pkt);
+	net_hexdump_frags("TCPv6", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -1202,7 +1179,7 @@ static bool test_create_v4_fin_packet(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv4", pkt);
+	net_hexdump_frags("TCPv4", pkt, false);
 
 	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
 	if (!tcp_hdr) {
@@ -1239,15 +1216,15 @@ static bool test_v6_seq_check(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv6", pkt);
+	net_hexdump_frags("TCPv6", pkt, false);
 
 	seq = NET_TCP_HDR(pkt)->seq[0] << 24 |
 		NET_TCP_HDR(pkt)->seq[1] << 16 |
 		NET_TCP_HDR(pkt)->seq[2] << 8 |
 		NET_TCP_HDR(pkt)->seq[3];
-	if (seq != (tcp->send_seq - 1)) {
+	if (seq != tcp->send_seq) {
 		DBG("Seq does not match (%u vs %u)\n",
-		    seq + 1, tcp->send_seq);
+		    seq, tcp->send_seq);
 		return false;
 	}
 
@@ -1271,15 +1248,15 @@ static bool test_v4_seq_check(void)
 		return false;
 	}
 
-	net_hexdump_frags("TCPv4", pkt);
+	net_hexdump_frags("TCPv4", pkt, false);
 
 	seq = NET_TCP_HDR(pkt)->seq[0] << 24 |
 		NET_TCP_HDR(pkt)->seq[1] << 16 |
 		NET_TCP_HDR(pkt)->seq[2] << 8 |
 		NET_TCP_HDR(pkt)->seq[3];
-	if (seq != (tcp->send_seq - 1)) {
+	if (seq != tcp->send_seq) {
 		DBG("Seq does not match (%u vs %u)\n",
-		    seq + 1, tcp->send_seq);
+		    seq, tcp->send_seq);
 		return false;
 	}
 
@@ -1698,10 +1675,10 @@ static bool test_init(void)
 		return false;
 	}
 
-	net_ipaddr_copy(&any_addr6.sin6_addr, &in6addr_any);
+	net_ipaddr_copy(&any_addr6.sin6_addr, &sin6_addr_any);
 	any_addr6.sin6_family = AF_INET6;
 
-	net_ipaddr_copy(&any_addr4.sin_addr, &in4addr_any);
+	net_ipaddr_copy(&any_addr4.sin_addr, &sin_addr_any);
 	any_addr4.sin_family = AF_INET;
 
 	k_sem_init(&wait_connect, 0, UINT_MAX);

@@ -9,8 +9,6 @@ source "subsys/bluetooth/Kconfig"
 
 source "subsys/console/Kconfig"
 
-source "subsys/cpp/Kconfig"
-
 source "subsys/debug/Kconfig"
 
 source "subsys/disk/Kconfig"
@@ -19,8 +17,18 @@ source "subsys/fs/Kconfig"
 
 source "subsys/logging/Kconfig"
 
+source "subsys/mgmt/Kconfig"
+
 source "subsys/net/Kconfig"
 
 source "subsys/shell/Kconfig"
 
 source "subsys/usb/Kconfig"
+
+source "subsys/dfu/Kconfig"
+
+source "subsys/random/Kconfig"
+
+source "subsys/storage/Kconfig"
+
+source "subsys/settings/Kconfig"

@@ -19,7 +19,7 @@
 
 #ifndef _ASMLANGUAGE
 #include <device.h>
-#include <drivers/rand32.h>
+#include <random/rand32.h>
 #endif
 
 #ifdef CONFIG_IOAPIC
@@ -97,25 +97,14 @@
 #define I2C_DW_PCI_DEVICE_ID			0x0934
 #define I2C_DW_PCI_CLASS			0x0C
 
-#define I2C_DW_0_BASE_ADDR			0x90007000
-#define I2C_DW_0_IRQ				18
-
 #define I2C_DW_0_PCI_BUS			0
 #define I2C_DW_0_PCI_DEV			21
 #define I2C_DW_0_PCI_FUNCTION			2
 #define I2C_DW_0_PCI_BAR			0
 
-#if defined(CONFIG_IOAPIC)
-#define I2C_DW_IRQ_FLAGS			(IOAPIC_LEVEL | IOAPIC_LOW)
-#endif
-
 /*
  * UART
  */
-#define UART_NS16550_PORT_0_BASE_ADDR		0x9000f000
-#define UART_NS16550_PORT_0_IRQ			0
-#define UART_NS16550_PORT_0_CLK_FREQ		44236800
-
 #define UART_NS16550_PORT_0_PCI_CLASS		0x07
 #define UART_NS16550_PORT_0_PCI_BUS		0
 #define UART_NS16550_PORT_0_PCI_DEV		20
@@ -123,10 +112,6 @@
 #define UART_NS16550_PORT_0_PCI_DEVICE_ID	0x0936
 #define UART_NS16550_PORT_0_PCI_FUNC		1
 #define UART_NS16550_PORT_0_PCI_BAR		0
-
-#define UART_NS16550_PORT_1_BASE_ADDR		0x9000b000
-#define UART_NS16550_PORT_1_IRQ			17
-#define UART_NS16550_PORT_1_CLK_FREQ		44236800
 
 #define UART_NS16550_PORT_1_PCI_CLASS		0x07
 #define UART_NS16550_PORT_1_PCI_BUS		0

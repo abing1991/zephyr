@@ -1,8 +1,13 @@
 sample:
-    description: TBD
-    name: DNS Resolver
+  description: DNS resolver sample application
+  name: DNS Resolver
+common:
+  harness: net
+  depends_on: netif
+  tags: net dns
 tests:
--   test:
-        build_only: true
-        tags: net dns
-        depends_on: netif
+  test:
+    extra_configs:
+      - CONFIG_NET_DHCPV4=y
+      - CONFIG_NET_DEBUG_APP=y
+      - CONFIG_SYS_LOG_NET_LEVEL=4

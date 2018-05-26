@@ -15,13 +15,41 @@
 #include <net/net_context.h>
 #include <net/net_pkt.h>
 
+#ifdef CONFIG_NET_MGMT_EVENT_INFO
+
+#include <net/net_event.h>
+
+/* Maximum size of "struct net_event_ipv6_addr" or
+ * "struct net_event_ipv6_nbr" or "struct net_event_ipv6_route".
+ * NOTE: Update comments here and calculate which struct occupies max size.
+ */
+
+#ifdef CONFIG_NET_L2_WIFI_MGMT
+
+#include <net/wifi_mgmt.h>
+#define NET_EVENT_INFO_MAX_SIZE sizeof(struct wifi_scan_result)
+
+#else
+
+#define NET_EVENT_INFO_MAX_SIZE sizeof(struct net_event_ipv6_route)
+
+#endif /* CONFIG_NET_L2_WIFI_MGMT */
+#endif /* CONFIG_NET_MGMT_EVENT_INFO */
+
+#include "connection.h"
+
 extern void net_pkt_init(void);
-extern void net_if_init(struct k_sem *startup_sync);
+extern void net_if_init(void);
 extern void net_if_post_init(void);
+extern void net_if_carrier_down(struct net_if *iface);
 extern void net_context_init(void);
 enum net_verdict net_ipv4_process_pkt(struct net_pkt *pkt);
 enum net_verdict net_ipv6_process_pkt(struct net_pkt *pkt);
 extern void net_ipv6_init(void);
+extern void net_tc_tx_init(void);
+extern void net_tc_rx_init(void);
+extern void net_tc_submit_to_tx_queue(u8_t tc, struct net_pkt *pkt);
+extern void net_tc_submit_to_rx_queue(u8_t tc, struct net_pkt *pkt);
 
 #if defined(CONFIG_NET_IPV6_FRAGMENT)
 int net_ipv6_send_fragmented_pkt(struct net_if *iface, struct net_pkt *pkt,
@@ -57,6 +85,9 @@ struct net_icmp_hdr *net_icmp_header_fits(struct net_pkt *pkt,
 	return NULL;
 }
 
+/* Header may be split between data fragments. In most cases,
+ * net_udp_get_hdr() should be used instead.
+ */
 struct net_udp_hdr *net_pkt_udp_data(struct net_pkt *pkt);
 
 static inline
@@ -70,6 +101,9 @@ struct net_udp_hdr *net_udp_header_fits(struct net_pkt *pkt,
 	return NULL;
 }
 
+/* Header may be split between data fragments. In most cases,
+ * net_tcp_get_hdr() should be used instead.
+ */
 struct net_tcp_hdr *net_pkt_tcp_data(struct net_pkt *pkt);
 
 static inline
@@ -82,6 +116,13 @@ struct net_tcp_hdr *net_tcp_header_fits(struct net_pkt *pkt,
 
 	return NULL;
 }
+
+void net_context_set_appdata_values(struct net_pkt *pkt,
+				    enum net_ip_protocol proto);
+
+enum net_verdict net_context_packet_received(struct net_conn *conn,
+					     struct net_pkt *pkt,
+					     void *user_data);
 
 #if defined(CONFIG_NET_IPV4)
 extern u16_t net_calc_chksum_ipv4(struct net_pkt *pkt);
@@ -159,24 +200,32 @@ static inline char *net_sprint_ip_addr(const struct net_addr *addr)
 	return NULL;
 }
 
-static inline void net_hexdump(const char *str, const u8_t *packet,
-			       size_t length)
+static inline void _hexdump(const u8_t *packet, size_t length, u8_t reserve)
 {
 	char output[sizeof("xxxxyyyy xxxxyyyy")];
 	int n = 0, k = 0;
 	u8_t byte;
-
-	if (!length) {
-		SYS_LOG_DBG("%s zero-length packet", str);
-		return;
-	}
+#if defined(CONFIG_SYS_LOG) && (SYS_LOG_LEVEL > SYS_LOG_LEVEL_OFF)
+	u8_t r = reserve;
+#endif
 
 	while (length--) {
 		if (n % 16 == 0) {
-			printk("%s %08X ", str, n);
+			printk(" %08X ", n);
 		}
 
 		byte = *packet++;
+
+#if defined(CONFIG_SYS_LOG) && (SYS_LOG_LEVEL > SYS_LOG_LEVEL_OFF)
+		if (reserve) {
+			if (r) {
+				printk(SYS_LOG_COLOR_YELLOW);
+				r--;
+			} else {
+				printk(SYS_LOG_COLOR_OFF);
+			}
+		}
+#endif
 
 		printk("%02X ", byte);
 
@@ -206,6 +255,7 @@ static inline void net_hexdump(const char *str, const u8_t *packet,
 		for (i = 0; i < (16 - (n % 16)); i++) {
 			printk("   ");
 		}
+
 		if ((n % 16) < 8) {
 			printk(" "); /* one extra delimiter after 8 chars */
 		}
@@ -214,14 +264,39 @@ static inline void net_hexdump(const char *str, const u8_t *packet,
 	}
 }
 
-/* Hexdump from all fragments */
-static inline void net_hexdump_frags(const char *str, struct net_pkt *pkt)
+static inline void net_hexdump(const char *str,
+			       const u8_t *packet, size_t length)
 {
+	if (!length) {
+		SYS_LOG_DBG("%s zero-length packet", str);
+		return;
+	}
+
+	printk("%s\n", str);
+
+	_hexdump(packet, length, 0);
+}
+
+
+/* Hexdump from all fragments
+ * Set full as true to get also the L2 reserve part printed out
+ */
+static inline void net_hexdump_frags(const char *str,
+				     struct net_pkt *pkt, bool full)
+{
+	u8_t reserve = full ? net_pkt_ll_reserve(pkt) : 0;
 	struct net_buf *frag = pkt->frags;
 
+	printk("%s\n", str);
+
 	while (frag) {
-		net_hexdump(str, frag->data, frag->len);
+		_hexdump(full ? frag->data - reserve : frag->data,
+			 frag->len + reserve, reserve);
 		frag = frag->frags;
+
+		if (full && reserve) {
+			reserve -= net_pkt_ll_reserve(pkt);
+		}
 	}
 }
 
@@ -283,7 +358,7 @@ static inline char *net_sprint_ip_addr(const struct net_addr *addr)
 	return NULL;
 }
 
-#define net_hexdump(str, packet, length)
+#define net_hexdump(...)
 #define net_hexdump_frags(...)
 
 #define net_print_frags(...)

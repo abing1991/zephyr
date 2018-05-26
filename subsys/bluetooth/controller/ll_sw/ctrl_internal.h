@@ -165,6 +165,7 @@ struct connection {
 #endif /* CONFIG_BT_CTLR_PHY */
 
 		struct {
+			u8_t  initiate;
 			u8_t  error_code;
 			u8_t  rand[8];
 			u8_t  ediv[2];
@@ -207,6 +208,7 @@ struct connection {
 			LLCP_CPR_STATE_UPD
 		} state:3 __packed;
 		u8_t  cmd:1;
+		u8_t  disabled:1;
 		u8_t  status;
 		u16_t interval;
 		u16_t latency;
@@ -312,7 +314,7 @@ struct pdu_data_q_tx {
 /* Minimum Tx Ctrl allocation size */
 #define PACKET_TX_CTRL_SIZE_MIN \
 			MROUND(offsetof(struct radio_pdu_node_tx, pdu_data) + \
-			offsetof(struct pdu_data, payload) + 27)
+			offsetof(struct pdu_data, lldata) + 27)
 
 /** @todo fix starvation when ctrl rx in radio ISR
  * for multiple connections needs to tx back to peer.
@@ -325,16 +327,12 @@ struct pdu_data_q_tx {
 #define LL_MEM_TXQ (sizeof(struct pdu_data_q_tx) * \
 		    (RADIO_PACKET_COUNT_TX_MAX + 2))
 
-#define LL_MEM_RX_POOL_SZ (MROUND(offsetof(struct radio_pdu_node_rx,\
-				pdu_data) + ((\
-			(PDU_AC_SIZE_MAX + PDU_AC_SIZE_EXTRA) < \
-			 (offsetof(struct pdu_data, payload) + \
-			  RADIO_LL_LENGTH_OCTETS_RX_MAX)) ? \
-		      (offsetof(struct pdu_data, payload) + \
-		      RADIO_LL_LENGTH_OCTETS_RX_MAX) \
-			: \
-		      (PDU_AC_SIZE_MAX + PDU_AC_SIZE_EXTRA))) * \
-			(RADIO_PACKET_COUNT_RX_MAX + 3))
+#define LL_MEM_RX_POOL_SZ (MROUND(offsetof(struct radio_pdu_node_rx, \
+					   pdu_data) + \
+				  max((PDU_AC_SIZE_MAX + PDU_AC_SIZE_EXTRA), \
+				      (offsetof(struct pdu_data, lldata) + \
+				       RADIO_LL_LENGTH_OCTETS_RX_MAX))) * \
+			   (RADIO_PACKET_COUNT_RX_MAX + 3))
 
 #define LL_MEM_RX_LINK_POOL (sizeof(void *) * 2 * ((RADIO_PACKET_COUNT_RX_MAX +\
 				4) + RADIO_CONNECTION_CONTEXT_MAX))
@@ -342,7 +340,7 @@ struct pdu_data_q_tx {
 #define LL_MEM_TX_CTRL_POOL (PACKET_TX_CTRL_SIZE_MIN * PACKET_MEM_COUNT_TX_CTRL)
 #define LL_MEM_TX_DATA_POOL ((MROUND(offsetof( \
 					struct radio_pdu_node_tx, pdu_data) + \
-		   offsetof(struct pdu_data, payload) + \
+		   offsetof(struct pdu_data, lldata) + \
 				RADIO_PACKET_TX_DATA_SIZE)) \
 			* (RADIO_PACKET_COUNT_TX_MAX + 1))
 

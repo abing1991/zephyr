@@ -12,7 +12,7 @@
  */
 
 #include <autoconf.h>
-
+#include <generated_dts_board.h>
 /* physical address where the kernel is loaded */
 #define PHYS_LOAD_ADDR CONFIG_PHYS_LOAD_ADDR
 
@@ -39,6 +39,9 @@ MEMORY
      */
 
     IDT_LIST        : ORIGIN = 2K, LENGTH = 2K
+#ifdef CONFIG_X86_MMU
+    MMU_LIST	    : ORIGIN = 4k, LENGTH = 1K
+#endif
     }
 
 #include <arch/x86/linker.ld>

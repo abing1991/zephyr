@@ -33,14 +33,14 @@ static inline void _init_timeout(struct _timeout *t, _timeout_func_t func)
 	t->delta_ticks_from_prev = _INACTIVE;
 
 	/*
-	 * Must be initialized here so that the _fiber_wakeup family of APIs can
-	 * verify the fiber is not on a wait queue before aborting a timeout.
+	 * Must be initialized here so that k_wakeup can
+	 * verify the thread is not on a wait queue before aborting a timeout.
 	 */
 	t->wait_q = NULL;
 
 	/*
 	 * Must be initialized here, so the _handle_one_timeout()
-	 * routine can check if there is a fiber waiting on this timeout
+	 * routine can check if there is a thread waiting on this timeout
 	 */
 	t->thread = NULL;
 
@@ -69,7 +69,7 @@ static inline void _unpend_thread_timing_out(struct k_thread *thread,
 					     struct _timeout *timeout_obj)
 {
 	if (timeout_obj->wait_q) {
-		_unpend_thread(thread);
+		_unpend_thread_no_timeout(thread);
 		thread->base.timeout.wait_q = NULL;
 	}
 }
@@ -90,6 +90,7 @@ static inline void _handle_one_expired_timeout(struct _timeout *timeout)
 	K_DEBUG("timeout %p\n", timeout);
 	if (thread) {
 		_unpend_thread_timing_out(thread, timeout);
+		_mark_thread_as_started(thread);
 		_ready_thread(thread);
 		irq_unlock(key);
 	} else {
@@ -197,7 +198,7 @@ static inline void _add_timeout(struct k_thread *thread,
 				_wait_q_t *wait_q,
 				s32_t timeout_in_ticks)
 {
-	__ASSERT(timeout_in_ticks > 0, "");
+	__ASSERT(timeout_in_ticks >= 0, "");
 
 	timeout->delta_ticks_from_prev = timeout_in_ticks;
 	timeout->thread = thread;
@@ -206,6 +207,16 @@ static inline void _add_timeout(struct k_thread *thread,
 	K_DEBUG("before adding timeout %p\n", timeout);
 	_dump_timeout(timeout, 0);
 	_dump_timeout_q();
+
+	/* If timer is submitted to expire ASAP with
+	 * timeout_in_ticks (duration) as zero value,
+	 * then handle timeout immedately without going
+	 * through timeout queue.
+	 */
+	if (!timeout_in_ticks) {
+		_handle_one_expired_timeout(timeout);
+		return;
+	}
 
 	s32_t *delta = &timeout->delta_ticks_from_prev;
 	struct _timeout *in_q;

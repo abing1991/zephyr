@@ -67,16 +67,18 @@ static int hdc1008_channel_get(struct device *dev,
 	 * Register" sections for more details on processing
 	 * sample data.
 	 */
-	if (chan == SENSOR_CHAN_TEMP) {
+	if (chan == SENSOR_CHAN_AMBIENT_TEMP) {
 		/* val = -40 + 165 * sample / 2^16 */
 		tmp = 165 * (u64_t)drv_data->t_sample;
 		val->val1 = (s32_t)(tmp >> 16) - 40;
 		val->val2 = (1000000 * (tmp & 0xFFFF)) >> 16;
 	} else if (chan == SENSOR_CHAN_HUMIDITY) {
-		/* val = 100000 * sample / 2^16 */
-		tmp = 100000 * (u64_t)drv_data->rh_sample;
-		val->val1 = tmp >> 16;
-		val->val2 = (1000000 * (tmp & 0xFFFF)) >> 16;
+		/* val = 100 * sample / 2^16 */
+		u32_t tmp2;
+		tmp2 = 100 * (u32_t)drv_data->rh_sample;
+		val->val1 = tmp2 >> 16;
+		/* x * 1000000 / 65536 == x * 15625 / 1024 */
+		val->val2 = (15625 * (tmp2 & 0xFFFF)) >> 10;
 	} else {
 		return -ENOTSUP;
 	}
@@ -141,12 +143,11 @@ static int hdc1008_init(struct device *dev)
 		return -EIO;
 	}
 
-	dev->driver_api = &hdc1008_driver_api;
-
 	return 0;
 }
 
 static struct hdc1008_data hdc1008_data;
 
-DEVICE_INIT(hdc1008, CONFIG_HDC1008_NAME, hdc1008_init, &hdc1008_data,
-	    NULL, POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY);
+DEVICE_AND_API_INIT(hdc1008, CONFIG_HDC1008_NAME, hdc1008_init, &hdc1008_data,
+		    NULL, POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY,
+		    &hdc1008_driver_api);

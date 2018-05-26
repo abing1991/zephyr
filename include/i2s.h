@@ -44,7 +44,7 @@ typedef u8_t i2s_fmt_t;
 
 /** @brief Standard I2S Data Format.
  *
- * Serial data is transmitted in two’s complement with the MSB first. Both
+ * Serial data is transmitted in two's complement with the MSB first. Both
  * Word Select (WS) and Serial Data (SD) signals are sampled on the rising edge
  * of the clock signal (SCK). The MSB is always sent one clock period after the
  * WS changes. Left channel data are sent first indicated by WS = 0, followed
@@ -63,7 +63,7 @@ typedef u8_t i2s_fmt_t;
 
 /** @brief PCM Short Frame Sync Data Format.
  *
- * Serial data is transmitted in two’s complement with the MSB first. Both
+ * Serial data is transmitted in two's complement with the MSB first. Both
  * Word Select (WS) and Serial Data (SD) signals are sampled on the falling edge
  * of the clock signal (SCK). The falling edge of the frame sync signal (WS)
  * indicates the start of the PCM word. The frame sync is one clock cycle long.
@@ -82,7 +82,7 @@ typedef u8_t i2s_fmt_t;
 
 /** @brief PCM Long Frame Sync Data Format.
  *
- * Serial data is transmitted in two’s complement with the MSB first. Both
+ * Serial data is transmitted in two's complement with the MSB first. Both
  * Word Select (WS) and Serial Data (SD) signals are sampled on the falling edge
  * of the clock signal (SCK). The rising edge of the frame sync signal (WS)
  * indicates the start of the PCM word. The frame sync has an arbitrary length,
@@ -103,7 +103,7 @@ typedef u8_t i2s_fmt_t;
 /**
  * @brief Left Justified Data Format.
  *
- * Serial data is transmitted in two’s complement with the MSB first. Both
+ * Serial data is transmitted in two's complement with the MSB first. Both
  * Word Select (WS) and Serial Data (SD) signals are sampled on the rising edge
  * of the clock signal (SCK). The bits within the data word are left justified
  * such that the MSB is always sent in the clock period following the WS
@@ -124,7 +124,7 @@ typedef u8_t i2s_fmt_t;
 /**
  * @brief Right Justified Data Format.
  *
- * Serial data is transmitted in two’s complement with the MSB first. Both
+ * Serial data is transmitted in two's complement with the MSB first. Both
  * Word Select (WS) and Serial Data (SD) signals are sampled on the rising edge
  * of the clock signal (SCK). The bits within the data word are right justified
  * such that the LSB is always sent in the clock period preceding the WS
@@ -148,11 +148,24 @@ typedef u8_t i2s_fmt_t;
 #define I2S_FMT_DATA_ORDER_LSB              (1 << 3)
 /** Invert bit ordering, send LSB first */
 #define I2S_FMT_DATA_ORDER_INV              I2S_FMT_DATA_ORDER_LSB
+
+/** Data Format bit field position. */
+#define I2S_FMT_CLK_FORMAT_SHIFT           4
+/** Data Format bit field mask. */
+#define I2S_FMT_CLK_FORMAT_MASK            (0x3 << I2S_FMT_CLK_FORMAT_SHIFT)
+
 /** Invert bit clock */
 #define I2S_FMT_BIT_CLK_INV                 (1 << 4)
 /** Invert frame clock */
 #define I2S_FMT_FRAME_CLK_INV               (1 << 5)
 
+/** NF represents "Normal Frame" whereas IF represents "Inverted Frame"
+ *  NB represents "Normal Bit Clk" whereas IB represents "Inverted Bit clk"
+ */
+#define I2S_FMT_CLK_NF_NB		(0 << I2S_FMT_CLK_FORMAT_SHIFT)
+#define I2S_FMT_CLK_NF_IB		(1 << I2S_FMT_CLK_FORMAT_SHIFT)
+#define I2S_FMT_CLK_IF_NB		(2 << I2S_FMT_CLK_FORMAT_SHIFT)
+#define I2S_FMT_CLK_IF_IB		(3 << I2S_FMT_CLK_FORMAT_SHIFT)
 
 typedef u8_t i2s_opt_t;
 
@@ -168,6 +181,7 @@ typedef u8_t i2s_opt_t;
 #define I2S_OPT_FRAME_CLK_MASTER            (0 << 2)
 /** I2S driver is frame clock slave */
 #define I2S_OPT_FRAME_CLK_SLAVE             (1 << 2)
+
 /** @brief Loop back mode.
  *
  * In loop back mode RX input will be connected internally to TX output.
@@ -175,7 +189,19 @@ typedef u8_t i2s_opt_t;
  */
 #define I2S_OPT_LOOPBACK                    (1 << 7)
 
+/** @brief Ping pong mode
+ *
+ * In ping pong mode TX output will keep alternating between a ping buffer
+ * and a pong buffer. This is normally used in audio streams when one buffer
+ * is being populated while the other is being played (DMAed) and vice versa.
+ * So, in this mode, 2 sets of buffers fixed in size are used. Static Arrays
+ * are used to achieve this and hence they are never freed.
+ */
+#define I2S_OPT_PINGPONG                    (1 << 6)
 
+/**
+ * @brief I2C Direction
+ */
 enum i2s_dir {
 	/** Receive data */
 	I2S_DIR_RX,

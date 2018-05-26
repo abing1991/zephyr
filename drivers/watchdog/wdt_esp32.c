@@ -5,10 +5,10 @@
  */
 
 /* Include esp-idf headers first to avoid redefining BIT() macro */
-#include <rom/ets_sys.h>
 #include <soc/rtc_cntl_reg.h>
 #include <soc/timer_group_reg.h>
 
+#include <soc.h>
 #include <string.h>
 #include <watchdog.h>
 #include <device.h>
@@ -48,7 +48,7 @@ static void wdt_esp32_enable(struct device *dev)
 	wdt_esp32_seal();
 }
 
-static void wdt_esp32_disable(struct device *dev)
+static int wdt_esp32_disable(struct device *dev)
 {
 	volatile u32_t *reg = (u32_t *)TIMG_WDTCONFIG0_REG(1);
 
@@ -57,6 +57,8 @@ static void wdt_esp32_disable(struct device *dev)
 	wdt_esp32_unseal();
 	*reg &= ~BIT(TIMG_WDT_EN_S);
 	wdt_esp32_seal();
+
+	return 0;
 }
 
 static void adjust_timeout(u32_t timeout)
@@ -212,7 +214,8 @@ static int wdt_esp32_init(struct device *dev)
 	 * located in xtensa_vectors.S.
 	 */
 	irq_disable(CONFIG_WDT_ESP32_IRQ);
-	intr_matrix_set(0, ETS_TG1_WDT_LEVEL_INTR_SOURCE, CONFIG_WDT_ESP32_IRQ);
+	esp32_rom_intr_matrix_set(0, ETS_TG1_WDT_LEVEL_INTR_SOURCE,
+				  CONFIG_WDT_ESP32_IRQ);
 
 	return 0;
 }

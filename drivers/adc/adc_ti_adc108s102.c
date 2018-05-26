@@ -10,7 +10,6 @@
 
 #include <kernel.h>
 #include <misc/util.h>
-#define SYS_LOG_NO_NEWLINE
 #define SYS_LOG_LEVEL CONFIG_SYS_LOG_ADC_LEVEL
 #include <logging/sys_log.h>
 #include <string.h>
@@ -21,14 +20,26 @@
 static inline int _ti_adc108s102_sampling(struct device *dev)
 {
 	struct ti_adc108s102_data *adc = dev->driver_data;
+	const struct spi_buf tx_buf = {
+		.buf = adc->cmd_buffer,
+		.len = ADC108S102_CMD_BUFFER_SIZE
+	};
+	const struct spi_buf_set tx = {
+		.buffers = &tx_buf,
+		.count = 1
+	};
+	const struct spi_buf rx_buf = {
+		.buf = adc->sampling_buffer,
+		.len = ADC108S102_SAMPLING_BUFFER_SIZE
+	};
+	const struct spi_buf_set rx = {
+		.buffers = &rx_buf,
+		.count = 1
+	};
 
-	SYS_LOG_DBG("Sampling!\n");
+	SYS_LOG_DBG("Sampling!");
 
-	/* SPI deals with u8_t buffers so multiplying by 2 the length */
-	return spi_transceive(adc->spi, adc->cmd_buffer,
-			      adc->cmd_buf_len * 2,
-			      adc->sampling_buffer,
-			      adc->sampling_buf_len * 2);
+	return spi_transceive(adc->spi, &adc->spi_cfg, &tx, &rx);
 }
 
 static inline void _ti_adc108s102_handle_result(struct device *dev)
@@ -76,7 +87,7 @@ static inline s32_t _ti_adc108s102_prepare(struct device *dev)
 			continue;
 		}
 
-		SYS_LOG_DBG("Requesting channel %d\n", entry->channel_id);
+		SYS_LOG_DBG("Requesting channel %d", entry->channel_id);
 		adc->cmd_buffer[adc->cmd_buf_len] =
 				ADC108S102_CHANNEL_CMD(entry->channel_id);
 
@@ -123,16 +134,24 @@ static inline int _verify_entries(struct adc_seq_table *seq_table)
 	u32_t chans_set = 0;
 	int i;
 
+	if (seq_table->num_entries >= ADC108S102_CMD_BUFFER_SIZE) {
+		return 0;
+	}
+
 	for (i = 0; i < seq_table->num_entries; i++) {
 		entry = &seq_table->entries[i];
 
 		if (entry->sampling_delay <= 0 ||
-		    entry->channel_id > ADC108S102_CHANNELS) {
+		    entry->channel_id >= ADC108S102_CHANNELS) {
 			return 0;
 		}
 
 		if (!entry->buffer_length) {
 			continue;
+		}
+
+		if (entry->buffer_length & 0x1) {
+			return 0;
 		}
 
 		chans_set++;
@@ -144,22 +163,9 @@ static inline int _verify_entries(struct adc_seq_table *seq_table)
 static int ti_adc108s102_read(struct device *dev,
 					struct adc_seq_table *seq_table)
 {
-	const struct ti_adc108s102_config *config = dev->config->config_info;
 	struct ti_adc108s102_data *adc = dev->driver_data;
-	struct spi_config spi_conf;
 	int ret = 0;
 	s32_t delay;
-
-	spi_conf.config = config->spi_config_flags;
-	spi_conf.max_sys_freq = config->spi_freq;
-
-	if (spi_configure(adc->spi, &spi_conf)) {
-		return -EIO;
-	}
-
-	if (spi_slave_select(adc->spi, config->spi_slave)) {
-		return -EIO;
-	}
 
 	/* Resetting all internal channel data */
 	memset(adc->chans, 0, ADC108S102_CHANNELS_SIZE);
@@ -202,15 +208,20 @@ static const struct adc_driver_api ti_adc108s102_api = {
 
 static int ti_adc108s102_init(struct device *dev)
 {
-	const struct ti_adc108s102_config *config = dev->config->config_info;
 	struct ti_adc108s102_data *adc = dev->driver_data;
 
-	adc->spi = device_get_binding((char *)config->spi_port);
+	adc->spi = device_get_binding(
+		CONFIG_ADC_TI_ADC108S102_SPI_PORT_NAME);
 	if (!adc->spi) {
-		return -EPERM;
+		return -EINVAL;
 	}
 
-	SYS_LOG_DBG("ADC108s102 initialized\n");
+	adc->spi_cfg.operation = SPI_WORD_SET(16);
+	adc->spi_cfg.frequency = CONFIG_ADC_TI_ADC108S102_SPI_FREQ;
+	adc->spi_cfg.slave = CONFIG_ADC_TI_ADC108S102_SPI_SLAVE;
+
+
+	SYS_LOG_DBG("ADC108s102 initialized");
 
 	dev->driver_api = &ti_adc108s102_api;
 
@@ -221,16 +232,9 @@ static int ti_adc108s102_init(struct device *dev)
 
 static struct ti_adc108s102_data adc108s102_data;
 
-static const struct ti_adc108s102_config adc108s102_config = {
-	.spi_port = CONFIG_ADC_TI_ADC108S102_SPI_PORT_NAME,
-	.spi_config_flags = CONFIG_ADC_TI_ADC108S102_SPI_CONFIGURATION,
-	.spi_freq = CONFIG_ADC_TI_ADC108S102_SPI_MAX_FREQ,
-	.spi_slave = CONFIG_ADC_TI_ADC108S102_SPI_SLAVE,
-};
-
 DEVICE_INIT(adc108s102, CONFIG_ADC_0_NAME,
 			ti_adc108s102_init,
-			&adc108s102_data, &adc108s102_config,
+			&adc108s102_data, NULL,
 			POST_KERNEL, CONFIG_ADC_INIT_PRIORITY);
 
 #endif /* CONFIG_ADC_TI_ADC108S102 */

@@ -16,6 +16,7 @@
 /**
  * @brief Application network context
  * @defgroup net_context Application network context
+ * @ingroup networking
  * @{
  */
 
@@ -209,6 +210,14 @@ struct net_context {
 	 */
 	struct sockaddr remote;
 
+	/** Option values */
+	struct {
+#if defined(CONFIG_NET_CONTEXT_PRIORITY)
+		/** Priority of the network data sent via this net_context */
+		u8_t priority;
+#endif
+	} options;
+
 	/** Connection handle */
 	struct net_conn_handle *conn_handler;
 
@@ -254,6 +263,11 @@ struct net_context {
 	/** TCP connection information */
 	struct net_tcp *tcp;
 #endif /* CONFIG_NET_TCP */
+
+#if defined(CONFIG_NET_APP)
+	/** net_app connection information */
+	void *net_app;
+#endif /* CONFIG_NET_APP */
 
 #if defined(CONFIG_NET_SOCKETS)
 	/** Per-socket packet or connection queues */
@@ -723,7 +737,7 @@ int net_context_sendto(struct net_pkt *pkt,
  * This is similar as BSD recv() function.
  * Note that net_context_bind() should be called before net_context_recv().
  * Default random port number is assigned to local port. Only bind() will
- * updates connection information from context. If recv() is called before
+ * update connection information from context. If recv() is called before
  * bind() call, it may refuse to bind to a context which already has
  * a connection associated.
  *
@@ -763,6 +777,38 @@ int net_context_recv(struct net_context *context,
 int net_context_update_recv_wnd(struct net_context *context,
 				s32_t delta);
 
+enum net_context_option {
+	NET_OPT_PRIORITY = 1,
+};
+
+/**
+ * @brief Set an connection option for this context.
+ *
+ * @param context The network context to use.
+ * @param option Option to set
+ * @param value Option value
+ * @param len Option length
+ *
+ * @return 0 if ok, <0 if error
+ */
+int net_context_set_option(struct net_context *context,
+			   enum net_context_option option,
+			   const void *value, size_t len);
+
+/**
+ * @brief Get connection option value for this context.
+ *
+ * @param context The network context to use.
+ * @param option Option to set
+ * @param value Option value
+ * @param len Option length (returned to caller)
+ *
+ * @return 0 if ok, <0 if error
+ */
+int net_context_get_option(struct net_context *context,
+			   enum net_context_option option,
+			   void *value, size_t *len);
+
 /**
  * @typedef net_context_cb_t
  * @brief Callback used while iterating over network contexts
@@ -782,9 +828,16 @@ typedef void (*net_context_cb_t)(struct net_context *context, void *user_data);
 void net_context_foreach(net_context_cb_t cb, void *user_data);
 
 /**
- * @brief Create network buffer pool that is used by the IP stack
- * to allocate network buffers that are used by the context when
- * sending data to network.
+ * @brief Set custom network buffer pools for context send operations
+ *
+ * Set custom network buffer pools used by the IP stack to allocate
+ * network buffers used by the context when sending data to the
+ * network. Using dedicated buffers may help make send operations on
+ * a given context more reliable, e.g. not be subject to buffer
+ * starvation due to operations on other network contexts. Buffer pools
+ * are set per context, but several contexts may share the same buffers.
+ * Note that there's no support for per-context custom receive packet
+ * pools.
  *
  * @param context Context that will use the given net_buf pools.
  * @param tx_pool Pointer to the function that will return TX pool

@@ -77,8 +77,10 @@ void k_mem_slab_init(struct k_mem_slab *slab, void *buffer,
 	slab->buffer = buffer;
 	slab->num_used = 0;
 	create_free_list(slab);
-	sys_dlist_init(&slab->wait_q);
+	_waitq_init(&slab->wait_q);
 	SYS_TRACING_OBJ_INIT(k_mem_slab, slab);
+
+	_k_object_init(slab);
 }
 
 int k_mem_slab_alloc(struct k_mem_slab *slab, void **mem, s32_t timeout)
@@ -98,8 +100,7 @@ int k_mem_slab_alloc(struct k_mem_slab *slab, void **mem, s32_t timeout)
 		result = -ENOMEM;
 	} else {
 		/* wait for a free block or timeout */
-		_pend_current_thread(&slab->wait_q, timeout);
-		result = _Swap(key);
+		result = _pend_current_thread(key, &slab->wait_q, timeout);
 		if (result == 0) {
 			*mem = _current->base.swap_data;
 		}
@@ -118,17 +119,12 @@ void k_mem_slab_free(struct k_mem_slab *slab, void **mem)
 
 	if (pending_thread) {
 		_set_thread_return_value_with_data(pending_thread, 0, *mem);
-		_abort_thread_timeout(pending_thread);
 		_ready_thread(pending_thread);
-		if (_must_switch_threads()) {
-			_Swap(key);
-			return;
-		}
+		_reschedule(key);
 	} else {
 		**(char ***)mem = slab->free_list;
 		slab->free_list = *(char **)mem;
 		slab->num_used--;
+		irq_unlock(key);
 	}
-
-	irq_unlock(key);
 }

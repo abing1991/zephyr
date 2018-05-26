@@ -11,7 +11,6 @@
 #include <arch/arm/cortex_m/cmsis.h>
 #include <sys_clock.h>
 
-extern void youve_print(void);
 /*
  * Convenience defines.
  */
@@ -53,7 +52,7 @@ static u32_t expected_sys_ticks;
 #endif /* CONFIG_TICKLESS_IDLE */
 
 #ifdef CONFIG_TICKLESS_KERNEL
-int32_t _get_max_clock_time(void);
+s32_t _get_max_clock_time(void);
 #endif /* CONFIG_TICKLESS_KERNEL */
 
 /*
@@ -215,23 +214,23 @@ void _timer_idle_enter(s32_t sys_ticks)
 #ifdef CONFIG_TICKLESS_KERNEL
 
 /**
- * @brief provides total systicks programed.
+ * @brief provides total systicks programmed.
  *
- * returns : total number of sys ticks programed.
+ * returns : total number of sys ticks programmed.
  */
 
-uint32_t _get_program_time(void)
+u32_t _get_program_time(void)
 {
 	return expected_sys_ticks;
 }
 
 /**
- * @brief provides total systicks remaining since last programing of RTC.
+ * @brief provides total systicks remaining since last programming of RTC.
  *
- * returns : total number of sys ticks remaining since last RTC programing.
+ * returns : total number of sys ticks remaining since last RTC programming.
  */
 
-uint32_t _get_remaining_program_time(void)
+u32_t _get_remaining_program_time(void)
 {
 
 	if (!expected_sys_ticks) {
@@ -242,12 +241,12 @@ uint32_t _get_remaining_program_time(void)
 }
 
 /**
- * @brief provides total systicks passed since last programing of RTC.
+ * @brief provides total systicks passed since last programming of RTC.
  *
- * returns : total number of sys ticks passed since last RTC programing.
+ * returns : total number of sys ticks passed since last RTC programming.
  */
 
-uint32_t _get_elapsed_program_time(void)
+u32_t _get_elapsed_program_time(void)
 {
 	u32_t rtc_now, rtc_prev, rtc_elapsed;
 
@@ -279,7 +278,7 @@ uint32_t _get_elapsed_program_time(void)
  * 3. Calls routine to set rtc interrupt.
  */
 
-void _set_time(uint32_t time)
+void _set_time(u32_t time)
 {
 	if (!time) {
 		expected_sys_ticks = 0;
@@ -305,12 +304,12 @@ void _set_time(uint32_t time)
  * @brief provides time remaining to reach rtc count overflow.
  *
  * This function returns how many sys RTC remaining for rtc to overflow.
- * This will be required when we will programe RTC compare value to maximum
+ * This will be required when we will program RTC compare value to maximum
  * possible value.
  *
  * returns : difference between current systick and Maximum possible systick.
  */
-int32_t _get_max_clock_time(void)
+s32_t _get_max_clock_time(void)
 {
 	u32_t rtc_now, rtc_prev, rtc_away, sys_away = 0;
 
@@ -334,7 +333,7 @@ int32_t _get_max_clock_time(void)
 /**
  * @brief Enable sys Clock.
  *
- * This is used to programe RTC clock to maximum Clock time incase Clock to
+ * This is used to program RTC clock to maximum Clock time in case Clock to
  * remain On.
  */
 void _enable_sys_clock(void)
@@ -351,7 +350,7 @@ void _enable_sys_clock(void)
  * returns : total number of sys ticks passed since device bootup.
  */
 
-uint64_t _get_elapsed_clock_time(void)
+u64_t _get_elapsed_clock_time(void)
 {
 	u64_t elapsed;
 	u32_t rtc_now, rtc_elapsed, rtc_prev, sys_elapsed;
@@ -452,7 +451,7 @@ void _timer_idle_exit(void)
  * this example. The ISR will then announce the number of sys ticks it was
  * delayed (2), and schedule the next sys tick (5) at 500.
  */
-static void rtc1_nrf5_isr(void *arg)
+void rtc1_nrf5_isr(void *arg)
 {
 
 	ARG_UNUSED(arg);

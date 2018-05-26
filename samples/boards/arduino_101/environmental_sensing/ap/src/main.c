@@ -42,7 +42,7 @@ static ssize_t read_u32(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 			void *buf, u16_t len, u16_t offset)
 {
 	const u32_t *u32 = attr->user_data;
-	u16_t value = sys_cpu_to_le32(*u32);
+	u32_t value = sys_cpu_to_le32(*u32);
 
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, &value,
 				 sizeof(value));
@@ -51,19 +51,18 @@ static ssize_t read_u32(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 static struct bt_gatt_attr attrs[] = {
 	BT_GATT_PRIMARY_SERVICE(BT_UUID_ESS),
 
-	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE, BT_GATT_CHRC_READ),
-	BT_GATT_DESCRIPTOR(BT_UUID_TEMPERATURE, BT_GATT_PERM_READ,
-			   read_u16, NULL, &temp_value),
+	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE, BT_GATT_CHRC_READ,
+			       BT_GATT_PERM_READ, read_u16, NULL, &temp_value),
 	BT_GATT_CUD(TEMPERATURE_CUD, BT_GATT_PERM_READ),
 
-	BT_GATT_CHARACTERISTIC(BT_UUID_HUMIDITY, BT_GATT_CHRC_READ),
-	BT_GATT_DESCRIPTOR(BT_UUID_HUMIDITY, BT_GATT_PERM_READ,
-			   read_u16, NULL, &humidity_value),
+	BT_GATT_CHARACTERISTIC(BT_UUID_HUMIDITY, BT_GATT_CHRC_READ,
+			       BT_GATT_PERM_READ, read_u16, NULL,
+			       &humidity_value),
 	BT_GATT_CUD(HUMIDITY_CUD, BT_GATT_PERM_READ),
 
-	BT_GATT_CHARACTERISTIC(BT_UUID_PRESSURE, BT_GATT_CHRC_READ),
-	BT_GATT_DESCRIPTOR(BT_UUID_PRESSURE, BT_GATT_PERM_READ,
-			   read_u32, NULL, &pressure_value),
+	BT_GATT_CHARACTERISTIC(BT_UUID_PRESSURE, BT_GATT_CHRC_READ,
+			       BT_GATT_PERM_READ, read_u32, NULL,
+			       &pressure_value),
 	BT_GATT_CUD(PRESSURE_CUD, BT_GATT_PERM_READ),
 };
 
@@ -99,13 +98,13 @@ static void sensor_ipm_callback(void *context, u32_t id, volatile void *data)
 	volatile struct sensor_value *val = data;
 
 	switch (id) {
-	case SENSOR_CHAN_TEMP:
+	case SENSOR_CHAN_AMBIENT_TEMP:
 		/* resolution of 0.01 degrees Celsius */
 		temp_value = val->val1 * 100 + val->val2 / 10000;
 		break;
 	case SENSOR_CHAN_HUMIDITY:
 		/* resolution of 0.01 percent */
-		humidity_value = val->val1 / 10;
+		humidity_value = val->val1 * 100 + val->val2 / 10000;
 		break;
 	case SENSOR_CHAN_PRESS:
 		/* resolution of 0.1 Pa */

@@ -19,11 +19,12 @@
 #include <misc/byteorder.h>
 #include <zephyr.h>
 
+#include <settings/settings.h>
+
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/conn.h>
 #include <bluetooth/l2cap.h>
 #include <bluetooth/rfcomm.h>
-#include <bluetooth/storage.h>
 #include <bluetooth/sdp.h>
 
 #include <shell/shell.h>
@@ -39,11 +40,13 @@
 #define DATA_BREDR_MTU		48
 
 #define BT_SHELL_MODULE "bt"
+
+#if defined(CONFIG_BT_CONN)
 struct bt_conn *default_conn;
-static bt_addr_le_t id_addr;
 
 /* Connection context for BR/EDR legacy pairing in sec mode 3 */
 static struct bt_conn *pairing_conn;
+#endif /* CONFIG_BT_CONN */
 
 #if defined(CONFIG_BT_L2CAP_DYNAMIC_CHANNEL)
 NET_BUF_POOL_DEFINE(data_tx_pool, 1, DATA_MTU, BT_BUF_USER_DATA_MIN, NULL);
@@ -82,7 +85,7 @@ static struct bt_sdp_attribute spp_attrs[] = {
 			BT_SDP_DATA_ELEM_LIST(
 			{
 				BT_SDP_TYPE_SIZE(BT_SDP_UUID16),
-				BT_SDP_ARRAY_16(BT_UUID_L2CAP_VAL)
+				BT_SDP_ARRAY_16(BT_SDP_PROTO_L2CAP)
 			},
 			)
 		},
@@ -91,7 +94,7 @@ static struct bt_sdp_attribute spp_attrs[] = {
 			BT_SDP_DATA_ELEM_LIST(
 			{
 				BT_SDP_TYPE_SIZE(BT_SDP_UUID16),
-				BT_SDP_ARRAY_16(BT_UUID_RFCOMM_VAL)
+				BT_SDP_ARRAY_16(BT_SDP_PROTO_RFCOMM)
 			},
 			{
 				BT_SDP_TYPE_SIZE(BT_SDP_UINT8),
@@ -127,28 +130,6 @@ static struct bt_sdp_record spp_rec = BT_SDP_RECORD(spp_attrs);
 
 #endif /* CONFIG_BT_RFCOMM */
 
-static const char *current_prompt(void)
-{
-	static char str[BT_ADDR_LE_STR_LEN + 2];
-	static struct bt_conn_info info;
-
-	if (!default_conn) {
-		return NULL;
-	}
-
-	if (bt_conn_get_info(default_conn, &info) < 0) {
-		return NULL;
-	}
-
-	if (info.type != BT_CONN_TYPE_LE) {
-		return NULL;
-	}
-
-	bt_addr_le_to_str(info.le.dst, str, sizeof(str) - 2);
-	strcat(str, "> ");
-	return str;
-}
-
 static void device_found(const bt_addr_le_t *addr, s8_t rssi, u8_t evtype,
 			 struct net_buf_simple *buf)
 {
@@ -166,7 +147,7 @@ static void device_found(const bt_addr_le_t *addr, s8_t rssi, u8_t evtype,
 		}
 
 		/* Check if field length is correct */
-		if (len > buf->len || buf->len < 1) {
+		if (len > buf->len) {
 			break;
 		}
 
@@ -192,6 +173,36 @@ static void device_found(const bt_addr_le_t *addr, s8_t rssi, u8_t evtype,
 	       rssi, name);
 }
 
+#if !defined(CONFIG_BT_CONN)
+static const char *current_prompt(void)
+{
+	return NULL;
+}
+#endif /* !CONFIG_BT_CONN */
+
+#if defined(CONFIG_BT_CONN)
+static const char *current_prompt(void)
+{
+	static char str[BT_ADDR_LE_STR_LEN + 2];
+	static struct bt_conn_info info;
+
+	if (!default_conn) {
+		return NULL;
+	}
+
+	if (bt_conn_get_info(default_conn, &info) < 0) {
+		return NULL;
+	}
+
+	if (info.type != BT_CONN_TYPE_LE) {
+		return NULL;
+	}
+
+	bt_addr_le_to_str(info.le.dst, str, sizeof(str) - 2);
+	strcat(str, "> ");
+	return str;
+}
+
 static void conn_addr_str(struct bt_conn *conn, char *addr, size_t len)
 {
 	struct bt_conn_info info;
@@ -211,6 +222,60 @@ static void conn_addr_str(struct bt_conn *conn, char *addr, size_t len)
 		bt_addr_le_to_str(info.le.dst, addr, len);
 		break;
 	}
+}
+
+static void connected(struct bt_conn *conn, u8_t err)
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+
+	conn_addr_str(conn, addr, sizeof(addr));
+
+	if (err) {
+		printk("Failed to connect to %s (%u)\n", addr, err);
+		goto done;
+	}
+
+	printk("Connected: %s\n", addr);
+
+	if (!default_conn) {
+		default_conn = bt_conn_ref(conn);
+	}
+
+done:
+	/* clear connection reference for sec mode 3 pairing */
+	if (pairing_conn) {
+		bt_conn_unref(pairing_conn);
+		pairing_conn = NULL;
+	}
+}
+
+static void disconnected(struct bt_conn *conn, u8_t reason)
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+
+	conn_addr_str(conn, addr, sizeof(addr));
+	printk("Disconnected: %s (reason %u)\n", addr, reason);
+
+	if (default_conn == conn) {
+		bt_conn_unref(default_conn);
+		default_conn = NULL;
+	}
+}
+
+static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
+{
+	printk("LE conn  param req: int (0x%04x, 0x%04x) lat %d to %d\n",
+	       param->interval_min, param->interval_max, param->latency,
+	       param->timeout);
+
+	return true;
+}
+
+static void le_param_updated(struct bt_conn *conn, u16_t interval,
+			     u16_t latency, u16_t timeout)
+{
+	printk("LE conn param updated: int 0x%04x lat %d to %d\n", interval,
+	       latency, timeout);
 }
 
 #if defined(CONFIG_BT_BREDR)
@@ -339,60 +404,6 @@ static struct bt_sdp_discover_params discov_a2src = {
 static struct bt_sdp_discover_params discov;
 #endif
 
-static void connected(struct bt_conn *conn, u8_t err)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	conn_addr_str(conn, addr, sizeof(addr));
-
-	if (err) {
-		printk("Failed to connect to %s (%u)\n", addr, err);
-		goto done;
-	}
-
-	printk("Connected: %s\n", addr);
-
-	if (!default_conn) {
-		default_conn = bt_conn_ref(conn);
-	}
-
-done:
-	/* clear connection reference for sec mode 3 pairing */
-	if (pairing_conn) {
-		bt_conn_unref(pairing_conn);
-		pairing_conn = NULL;
-	}
-}
-
-static void disconnected(struct bt_conn *conn, u8_t reason)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	conn_addr_str(conn, addr, sizeof(addr));
-	printk("Disconnected: %s (reason %u)\n", addr, reason);
-
-	if (default_conn == conn) {
-		bt_conn_unref(default_conn);
-		default_conn = NULL;
-	}
-}
-
-static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
-{
-	printk("LE conn  param req: int (0x%04x, 0x%04x) lat %d to %d\n",
-	       param->interval_min, param->interval_max, param->latency,
-	       param->timeout);
-
-	return true;
-}
-
-static void le_param_updated(struct bt_conn *conn, u16_t interval,
-			     u16_t latency, u16_t timeout)
-{
-	printk("LE conn param updated: int 0x%04x lat %d to %d\n", interval,
-	       latency, timeout);
-}
-
 #if defined(CONFIG_BT_SMP)
 static void identity_resolved(struct bt_conn *conn, const bt_addr_le_t *rpa,
 			      const bt_addr_le_t *identity)
@@ -429,6 +440,7 @@ static struct bt_conn_cb conn_callbacks = {
 	.security_changed = security_changed,
 #endif
 };
+#endif /* CONFIG_BT_CONN */
 
 static int char2hex(const char *c, u8_t *x)
 {
@@ -494,42 +506,6 @@ static int str2bt_addr_le(const char *str, const char *type, bt_addr_le_t *addr)
 	return 0;
 }
 
-static ssize_t storage_read(const bt_addr_le_t *addr, u16_t key, void *data,
-			    size_t length)
-{
-	if (addr) {
-		return -ENOENT;
-	}
-
-	if (key == BT_STORAGE_ID_ADDR && length == sizeof(id_addr) &&
-	    bt_addr_le_cmp(&id_addr, BT_ADDR_LE_ANY)) {
-		bt_addr_le_copy(data, &id_addr);
-		return sizeof(id_addr);
-	}
-
-	return -EIO;
-}
-
-static ssize_t storage_write(const bt_addr_le_t *addr, u16_t key,
-			     const void *data, size_t length)
-{
-	if (addr) {
-		return -ENOENT;
-	}
-
-	if (key == BT_STORAGE_ID_ADDR && length == sizeof(id_addr)) {
-		bt_addr_le_copy(&id_addr, data);
-		return sizeof(id_addr);
-	}
-
-	return -EIO;
-}
-
-static int storage_clear(const bt_addr_le_t *addr)
-{
-	return -ENOSYS;
-}
-
 static void bt_ready(int err)
 {
 	if (err) {
@@ -539,35 +515,20 @@ static void bt_ready(int err)
 
 	printk("Bluetooth initialized\n");
 
+	if (IS_ENABLED(CONFIG_SETTINGS)) {
+		settings_load();
+	}
+
+#if defined(CONFIG_BT_CONN)
 	default_conn = NULL;
 
 	bt_conn_cb_register(&conn_callbacks);
+#endif /* CONFIG_BT_CONN */
 }
 
 static int cmd_init(int argc, char *argv[])
 {
-	static const struct bt_storage storage = {
-		.read = storage_read,
-		.write = storage_write,
-		.clear = storage_clear,
-	};
 	int err;
-
-	if (argc > 1) {
-		if (argc < 3) {
-			printk("Invalid address\n");
-			return -EINVAL;
-		}
-
-		err = str2bt_addr_le(argv[1], argv[2], &id_addr);
-		if (err) {
-			printk("Invalid address (err %d)\n", err);
-			bt_addr_le_cmp(&id_addr, BT_ADDR_LE_ANY);
-			return -EINVAL;
-		}
-
-		bt_storage_register(&storage);
-	}
 
 	err = bt_enable(bt_ready);
 	if (err) {
@@ -667,6 +628,86 @@ static int cmd_scan(int argc, char *argv[])
 	return 0;
 }
 
+static const struct bt_data ad_discov[] = {
+	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+};
+
+static const struct bt_data sd[] = {
+	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
+};
+
+static int cmd_advertise(int argc, char *argv[])
+{
+	struct bt_le_adv_param param;
+	const struct bt_data *ad, *scan_rsp;
+	size_t ad_len, scan_rsp_len;
+	int err;
+
+	if (argc < 2) {
+		goto fail;
+	}
+
+	if (!strcmp(argv[1], "off")) {
+		if (bt_le_adv_stop() < 0) {
+			printk("Failed to stop advertising\n");
+		} else {
+			printk("Advertising stopped\n");
+		}
+
+		return 0;
+	}
+
+	param.interval_min = BT_GAP_ADV_FAST_INT_MIN_2;
+	param.interval_max = BT_GAP_ADV_FAST_INT_MAX_2;
+
+	if (!strcmp(argv[1], "on")) {
+		param.options = BT_LE_ADV_OPT_CONNECTABLE;
+		scan_rsp = sd;
+		scan_rsp_len = ARRAY_SIZE(sd);
+	} else if (!strcmp(argv[1], "scan")) {
+		param.options = 0;
+		scan_rsp = sd;
+		scan_rsp_len = ARRAY_SIZE(sd);
+	} else if (!strcmp(argv[1], "nconn")) {
+		param.options = 0;
+		scan_rsp = NULL;
+		scan_rsp_len = 0;
+	} else {
+		goto fail;
+	}
+
+	/* Parse advertisement data */
+	if (argc >= 3) {
+		const char *mode = argv[2];
+
+		if (!strcmp(mode, "discov")) {
+			ad = ad_discov;
+			ad_len = ARRAY_SIZE(ad_discov);
+		} else if (!strcmp(mode, "non_discov")) {
+			ad = NULL;
+			ad_len = 0;
+		} else {
+			goto fail;
+		}
+	} else {
+		ad = ad_discov;
+		ad_len = ARRAY_SIZE(ad_discov);
+	}
+
+	err = bt_le_adv_start(&param, ad, ad_len, scan_rsp, scan_rsp_len);
+	if (err < 0) {
+		printk("Failed to start advertising (err %d)\n", err);
+	} else {
+		printk("Advertising started\n");
+	}
+
+	return 0;
+
+fail:
+	return -EINVAL;
+}
+
+#if defined(CONFIG_BT_CONN)
 static int cmd_connect_le(int argc, char *argv[])
 {
 	int err;
@@ -819,6 +860,75 @@ static int cmd_conn_update(int argc, char *argv[])
 	return 0;
 }
 
+static int cmd_oob(int argc, char *argv[])
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+	struct bt_le_oob oob;
+	int err;
+
+	err = bt_le_oob_get_local(&oob);
+	if (err) {
+		printk("OOB data failed\n");
+		return 0;
+	}
+
+	bt_addr_le_to_str(&oob.addr, addr, sizeof(addr));
+
+	printk("OOB data:\n");
+	printk("  addr %s\n", addr);
+
+	return 0;
+}
+
+static int cmd_clear(int argc, char *argv[])
+{
+	bt_addr_le_t addr;
+	int err;
+
+	if (argc < 2) {
+		printk("Specify remote address or \"all\"\n");
+		return 0;
+	}
+
+	if (strcmp(argv[1], "all") == 0) {
+		err = bt_unpair(NULL);
+		if (err) {
+			printk("Failed to clear pairings (err %d)\n", err);
+		} else {
+			printk("Pairings successfully cleared\n");
+		}
+
+		return 0;
+	}
+
+	if (argc < 3) {
+#if defined(CONFIG_BT_BREDR)
+		addr.type = BT_ADDR_LE_PUBLIC;
+		err = str2bt_addr(argv[1], &addr.a);
+#else
+		printk("Both address and address type needed\n");
+		return 0;
+#endif
+	} else {
+		err = str2bt_addr_le(argv[1], argv[2], &addr);
+	}
+
+	if (err) {
+		printk("Invalid address\n");
+		return 0;
+	}
+
+	err = bt_unpair(&addr);
+	if (err) {
+		printk("Failed to clear pairing (err %d)\n", err);
+	} else {
+		printk("Pairing successfully cleared\n");
+	}
+
+	return 0;
+}
+#endif /* CONFIG_BT_CONN */
+
 #if defined(CONFIG_BT_SMP) || defined(CONFIG_BT_BREDR)
 static int cmd_security(int argc, char *argv[])
 {
@@ -842,109 +952,7 @@ static int cmd_security(int argc, char *argv[])
 
 	return 0;
 }
-#endif
 
-static const struct bt_data ad_discov[] = {
-	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-};
-
-static const struct bt_data sd[] = {
-	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
-};
-
-static int cmd_advertise(int argc, char *argv[])
-{
-	struct bt_le_adv_param param;
-	const struct bt_data *ad, *scan_rsp;
-	size_t ad_len, scan_rsp_len;
-	int err;
-
-	if (argc < 2) {
-		goto fail;
-	}
-
-	if (!strcmp(argv[1], "off")) {
-		if (bt_le_adv_stop() < 0) {
-			printk("Failed to stop advertising\n");
-		} else {
-			printk("Advertising stopped\n");
-		}
-
-		return 0;
-	}
-
-	param.own_addr = NULL;
-	param.interval_min = BT_GAP_ADV_FAST_INT_MIN_2;
-	param.interval_max = BT_GAP_ADV_FAST_INT_MAX_2;
-
-	if (!strcmp(argv[1], "on")) {
-		param.options = BT_LE_ADV_OPT_CONNECTABLE;
-		scan_rsp = sd;
-		scan_rsp_len = ARRAY_SIZE(sd);
-	} else if (!strcmp(argv[1], "scan")) {
-		param.options = 0;
-		scan_rsp = sd;
-		scan_rsp_len = ARRAY_SIZE(sd);
-	} else if (!strcmp(argv[1], "nconn")) {
-		param.options = 0;
-		scan_rsp = NULL;
-		scan_rsp_len = 0;
-	} else {
-		goto fail;
-	}
-
-	/* Parse advertisement data */
-	if (argc >= 3) {
-		const char *mode = argv[2];
-
-		if (!strcmp(mode, "discov")) {
-			ad = ad_discov;
-			ad_len = ARRAY_SIZE(ad_discov);
-		} else if (!strcmp(mode, "non_discov")) {
-			ad = NULL;
-			ad_len = 0;
-		} else {
-			goto fail;
-		}
-	} else {
-		ad = ad_discov;
-		ad_len = ARRAY_SIZE(ad_discov);
-	}
-
-	err = bt_le_adv_start(&param, ad, ad_len, scan_rsp, scan_rsp_len);
-	if (err < 0) {
-		printk("Failed to start advertising (err %d)\n", err);
-	} else {
-		printk("Advertising started\n");
-	}
-
-	return 0;
-
-fail:
-	return -EINVAL;
-}
-
-static int cmd_oob(int argc, char *argv[])
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-	struct bt_le_oob oob;
-	int err;
-
-	err = bt_le_oob_get_local(&oob);
-	if (err) {
-		printk("OOB data failed\n");
-		return 0;
-	}
-
-	bt_addr_le_to_str(&oob.addr, addr, sizeof(addr));
-
-	printk("OOB data:\n");
-	printk("  addr %s\n", addr);
-
-	return 0;
-}
-
-#if defined(CONFIG_BT_SMP) || defined(CONFIG_BT_BREDR)
 static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -1345,54 +1353,6 @@ static int cmd_bredr_discovery(int argc, char *argv[])
 }
 
 #endif /* CONFIG_BT_BREDR */
-
-static int cmd_clear(int argc, char *argv[])
-{
-	bt_addr_le_t addr;
-	int err;
-
-	if (argc < 2) {
-		printk("Specify remote address or \"all\"\n");
-		return 0;
-	}
-
-	if (strcmp(argv[1], "all") == 0) {
-		err = bt_storage_clear(NULL);
-		if (err) {
-			printk("Failed to clear storage (err %d)\n", err);
-		} else {
-			printk("Storage successfully cleared\n");
-		}
-
-		return 0;
-	}
-
-	if (argc < 3) {
-#if defined(CONFIG_BT_BREDR)
-		addr.type = BT_ADDR_LE_PUBLIC;
-		err = str2bt_addr(argv[1], &addr.a);
-#else
-		printk("Both address and address type needed\n");
-		return 0;
-#endif
-	} else {
-		err = str2bt_addr_le(argv[1], argv[2], &addr);
-	}
-
-	if (err) {
-		printk("Invalid address\n");
-		return 0;
-	}
-
-	err = bt_storage_clear(&addr);
-	if (err) {
-		printk("Failed to clear storage (err %d)\n", err);
-	} else {
-		printk("Storage successfully cleared\n");
-	}
-
-	return 0;
-}
 
 #if defined(CONFIG_BT_L2CAP_DYNAMIC_CHANNEL)
 static void hexdump(const u8_t *data, size_t len)
@@ -1972,6 +1932,7 @@ static const struct shell_cmd bt_commands[] = {
 	  "<value: on, passive, off> <dup filter: dups, nodups>" },
 	{ "advertise", cmd_advertise,
 	  "<type: off, on, scan, nconn> <mode: discov, non_discov>" },
+#if defined(CONFIG_BT_CONN)
 	{ "connect", cmd_connect_le, HELP_ADDR_LE },
 	{ "disconnect", cmd_disconnect, HELP_NONE },
 	{ "auto-conn", cmd_auto_conn, HELP_ADDR_LE },
@@ -2043,10 +2004,16 @@ static const struct shell_cmd bt_commands[] = {
 	{ "br-rfcomm-send", cmd_rfcomm_send, "<number of packets>"},
 	{ "br-rfcomm-disconnect", cmd_rfcomm_disconnect, HELP_NONE },
 #endif /* CONFIG_BT_RFCOMM */
-#endif
+#endif /* CONFIG_BT_BREDR */
+#endif /* CONFIG_BT_CONN */
 #if defined(CONFIG_BT_CTLR_ADV_EXT)
 	{ "advx", cmd_advx, "<on off> [coded] [anon] [txp]" },
 	{ "scanx", cmd_scanx, "<on passive off> [coded]" },
+#endif /* CONFIG_BT_CTLR_ADV_EXT */
+#if defined(CONFIG_BT_CTLR_DTM)
+	{ "test_tx", cmd_test_tx, "<chan> <len> <type> <phy>" },
+	{ "test_rx", cmd_test_rx, "<chan> <phy> <mod_idx>" },
+	{ "test_end", cmd_test_end, HELP_NONE},
 #endif /* CONFIG_BT_CTLR_ADV_EXT */
 	{ NULL, NULL, NULL }
 };

@@ -1,9 +1,10 @@
 sample:
-    description: TBD
-    name: TBD
+  name: Grove Temperature Sensor
 tests:
--   test:
-        build_only: true
-        platform_whitelist: arduino_101_sss quark_d2000_crb arduino_due
-        tags: drivers
-        min_flash: 33
+  test:
+    min_flash: 33
+    platform_whitelist: arduino_101_sss quark_d2000_crb
+      arduino_due
+    tags: drivers sensor grove temperature
+    harness: grove
+    depends_on: adc

@@ -18,12 +18,13 @@
 #include <net/net_pkt.h>
 #include <net/net_stats.h>
 #include <net/net_context.h>
+#include <net/tcp.h>
 #include "net_private.h"
 #include "connection.h"
 #include "net_stats.h"
 #include "icmpv4.h"
 #include "udp_internal.h"
-#include "tcp.h"
+#include "tcp_internal.h"
 #include "ipv4.h"
 
 struct net_pkt *net_ipv4_create_raw(struct net_pkt *pkt,
@@ -42,7 +43,12 @@ struct net_pkt *net_ipv4_create_raw(struct net_pkt *pkt,
 	NET_IPV4_HDR(pkt)->tos = 0x00;
 	NET_IPV4_HDR(pkt)->proto = 0;
 
-	NET_IPV4_HDR(pkt)->ttl = net_if_ipv4_get_ttl(iface);
+	/* User can tweak the default TTL if needed */
+	NET_IPV4_HDR(pkt)->ttl = net_pkt_ipv4_ttl(pkt);
+	if (NET_IPV4_HDR(pkt)->ttl == 0) {
+		NET_IPV4_HDR(pkt)->ttl = net_if_ipv4_get_ttl(iface);
+	}
+
 	NET_IPV4_HDR(pkt)->offset[0] = NET_IPV4_HDR(pkt)->offset[1] = 0;
 	NET_IPV4_HDR(pkt)->id[0] = NET_IPV4_HDR(pkt)->id[1] = 0;
 
@@ -64,6 +70,9 @@ struct net_pkt *net_ipv4_create(struct net_context *context,
 				const struct in_addr *src,
 				const struct in_addr *dst)
 {
+	struct net_if_ipv4 *ipv4 = net_pkt_iface(pkt)->config.ip.ipv4;
+
+	NET_ASSERT(ipv4);
 	NET_ASSERT(((struct sockaddr_in_ptr *)&context->local)->sin_addr);
 
 	if (!src) {
@@ -72,7 +81,7 @@ struct net_pkt *net_ipv4_create(struct net_context *context,
 
 	if (net_is_ipv4_addr_unspecified(src)
 	    || net_is_ipv4_addr_mcast(src)) {
-		src = &net_pkt_iface(pkt)->ipv4.unicast[0].address.in_addr;
+		src = &ipv4->unicast[0].address.in_addr;
 	}
 
 	return net_ipv4_create_raw(pkt,
@@ -91,19 +100,22 @@ int net_ipv4_finalize_raw(struct net_pkt *pkt, u8_t next_header)
 
 	total_len = net_pkt_get_len(pkt);
 
-	NET_IPV4_HDR(pkt)->len[0] = total_len / 256;
-	NET_IPV4_HDR(pkt)->len[1] = total_len - NET_IPV4_HDR(pkt)->len[0] * 256;
+	NET_IPV4_HDR(pkt)->len[0] = total_len >> 8;
+	NET_IPV4_HDR(pkt)->len[1] = total_len & 0xff;
 
 	NET_IPV4_HDR(pkt)->chksum = 0;
-	NET_IPV4_HDR(pkt)->chksum = ~net_calc_chksum_ipv4(pkt);
 
 #if defined(CONFIG_NET_UDP)
-	if (next_header == IPPROTO_UDP) {
+	if (next_header == IPPROTO_UDP &&
+	    net_if_need_calc_tx_checksum(net_pkt_iface(pkt))) {
+		NET_IPV4_HDR(pkt)->chksum = ~net_calc_chksum_ipv4(pkt);
 		net_udp_set_chksum(pkt, pkt->frags);
 	}
 #endif
 #if defined(CONFIG_NET_TCP)
-	if (next_header == IPPROTO_TCP) {
+	if (next_header == IPPROTO_TCP &&
+	    net_if_need_calc_tx_checksum(net_pkt_iface(pkt))) {
+		NET_IPV4_HDR(pkt)->chksum = ~net_calc_chksum_ipv4(pkt);
 		net_tcp_set_chksum(pkt, pkt->frags);
 	}
 #endif
@@ -137,6 +149,10 @@ static inline enum net_verdict process_icmpv4_pkt(struct net_pkt *pkt,
 	struct net_icmp_hdr hdr, *icmp_hdr;
 
 	icmp_hdr = net_icmpv4_get_hdr(pkt, &hdr);
+	if (!icmp_hdr) {
+		NET_DBG("NULL ICMPv4 header - dropping");
+		return NET_DROP;
+	}
 
 	NET_DBG("ICMPv4 packet received type %d code %d",
 		icmp_hdr->type, icmp_hdr->code);
@@ -169,7 +185,8 @@ enum net_verdict net_ipv4_process_pkt(struct net_pkt *pkt)
 
 	net_pkt_set_ip_hdr_len(pkt, sizeof(struct net_ipv4_hdr));
 
-	if (!net_is_my_ipv4_addr(&hdr->dst)) {
+	if (!net_is_my_ipv4_addr(&hdr->dst) &&
+	    !net_is_ipv4_addr_mcast(&hdr->dst)) {
 #if defined(CONFIG_NET_DHCPV4)
 		if (hdr->proto == IPPROTO_UDP &&
 		    net_ipv4_addr_cmp(&hdr->dst,
@@ -202,6 +219,6 @@ enum net_verdict net_ipv4_process_pkt(struct net_pkt *pkt)
 	}
 
 drop:
-	net_stats_update_ipv4_drop();
+	net_stats_update_ipv4_drop(net_pkt_iface(pkt));
 	return NET_DROP;
 }

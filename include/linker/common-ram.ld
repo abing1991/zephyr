@@ -22,6 +22,17 @@
 		_static_thread_data_list_end = .;
 	} GROUP_DATA_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
 
+#ifdef CONFIG_USERSPACE
+	/* All kernel objects within are assumed to be either completely
+	 * initialized at build time, or initialized automatically at runtime
+	 * via iteration before the POST_KERNEL phase.
+	 *
+	 * These two symbols only used by gen_kobject_list.py
+	 */
+
+	_static_kernel_objects_begin = .;
+#endif /* CONFIG_USERSPACE */
+
 	SECTION_DATA_PROLOGUE(_k_timer_area, (OPTIONAL), SUBALIGN(4))
 	{
 		_k_timer_list_start = .;
@@ -151,12 +162,12 @@
 		__net_if_end = .;
 	} GROUP_DATA_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
 
-	SECTION_DATA_PROLOGUE(net_if_event, (OPTIONAL), SUBALIGN(4))
+	SECTION_DATA_PROLOGUE(net_if_dev, (OPTIONAL), SUBALIGN(4))
 	{
-		__net_if_event_start = .;
-		*(".net_if_event.*")
-		KEEP(*(SORT_BY_NAME(".net_if_event.*")))
-		__net_if_event_end = .;
+		__net_if_dev_start = .;
+		*(".net_if_dev.*")
+		KEEP(*(SORT_BY_NAME(".net_if_dev.*")))
+		__net_if_dev_end = .;
 	} GROUP_DATA_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
 
 #if defined(CONFIG_NET_SHELL)
@@ -176,3 +187,7 @@
 		KEEP(*(SORT_BY_NAME(".net_l2.data*")))
 		__net_l2_data_end = .;
 	} GROUP_DATA_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
+
+#ifdef CONFIG_USERSPACE
+	_static_kernel_objects_end = .;
+#endif

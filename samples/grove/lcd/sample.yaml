@@ -1,9 +1,7 @@
 sample:
-    description: TBD
-    name: TBD
+  name: Grove LCD Sample
 tests:
--   test:
-        build_only: true
-        platform_whitelist: arduino_101_sss quark_d2000_crb
-            arduino_due
-        tags: drivers
+  test:
+    tags: drivers
+    harness: grove
+    depends_on: i2c

@@ -35,7 +35,26 @@
 
 NET_BUF_POOL_DEFINE(acl_tx_pool, CONFIG_BT_L2CAP_TX_BUF_COUNT,
 		    BT_L2CAP_BUF_SIZE(CONFIG_BT_L2CAP_TX_MTU),
-		    CONFIG_BT_L2CAP_TX_USER_DATA_SIZE, NULL);
+		    BT_BUF_USER_DATA_MIN, NULL);
+
+#if CONFIG_BT_L2CAP_TX_FRAG_COUNT > 0
+
+#if defined(BT_CTLR_TX_BUFFER_SIZE)
+#define FRAG_SIZE BT_L2CAP_BUF_SIZE(BT_CTLR_TX_BUFFER_SIZE - 4)
+#else
+#define FRAG_SIZE BT_L2CAP_BUF_SIZE(CONFIG_BT_L2CAP_TX_MTU)
+#endif
+
+/* Dedicated pool for fragment buffers in case queued up TX buffers don't
+ * fit the controllers buffer size. We can't use the acl_tx_pool for the
+ * fragmentation, since it's possible that pool is empty and all buffers
+ * are queued up in the TX queue. In such a situation, trying to allocate
+ * another buffer from the acl_tx_pool would result in a deadlock.
+ */
+NET_BUF_POOL_FIXED_DEFINE(frag_pool, CONFIG_BT_L2CAP_TX_FRAG_COUNT, FRAG_SIZE,
+			  NULL);
+
+#endif /* CONFIG_BT_L2CAP_TX_FRAG_COUNT > 0 */
 
 /* How long until we cancel HCI_LE_Create_Connection */
 #define CONN_TIMEOUT	K_SECONDS(3)
@@ -254,7 +273,6 @@ struct bt_conn *bt_conn_create_br(const bt_addr_t *peer,
 	conn = bt_conn_lookup_addr_br(peer);
 	if (conn) {
 		switch (conn->state) {
-			return conn;
 		case BT_CONN_CONNECT:
 		case BT_CONN_CONNECTED:
 			return conn;
@@ -306,7 +324,6 @@ struct bt_conn *bt_conn_create_sco(const bt_addr_t *peer)
 	sco_conn = bt_conn_lookup_addr_sco(peer);
 	if (sco_conn) {
 		switch (sco_conn->state) {
-			return sco_conn;
 		case BT_CONN_CONNECT:
 		case BT_CONN_CONNECTED:
 			return sco_conn;
@@ -768,8 +785,8 @@ void bt_conn_identity_resolved(struct bt_conn *conn)
 	}
 }
 
-int bt_conn_le_start_encryption(struct bt_conn *conn, u64_t rand,
-				u16_t ediv, const u8_t *ltk, size_t len)
+int bt_conn_le_start_encryption(struct bt_conn *conn, u8_t rand[8], u16_t ediv,
+				const u8_t *ltk, size_t len)
 {
 	struct bt_hci_cp_le_start_encryption *cp;
 	struct net_buf *buf;
@@ -781,7 +798,7 @@ int bt_conn_le_start_encryption(struct bt_conn *conn, u64_t rand,
 
 	cp = net_buf_add(buf, sizeof(*cp));
 	cp->handle = sys_cpu_to_le16(conn->handle);
-	cp->rand = rand;
+	memcpy(&cp->rand, rand, sizeof(cp->rand));
 	cp->ediv = ediv;
 
 	memcpy(cp->ltk, ltk, len);
@@ -889,14 +906,12 @@ static int start_security(struct bt_conn *conn)
 		}
 
 		if (conn->required_sec_level > BT_SECURITY_MEDIUM &&
-		    !atomic_test_bit(conn->le.keys->flags,
-				     BT_KEYS_AUTHENTICATED)) {
+		    !(conn->le.keys->flags & BT_KEYS_AUTHENTICATED)) {
 			return bt_smp_send_pairing_req(conn);
 		}
 
 		if (conn->required_sec_level > BT_SECURITY_HIGH &&
-		    !atomic_test_bit(conn->le.keys->flags,
-				     BT_KEYS_AUTHENTICATED) &&
+		    !(conn->le.keys->flags & BT_KEYS_AUTHENTICATED) &&
 		    !(conn->le.keys->keys & BT_KEYS_LTK_P256)) {
 			return bt_smp_send_pairing_req(conn);
 		}
@@ -1055,16 +1070,7 @@ void bt_conn_recv(struct bt_conn *conn, struct net_buf *buf, u8_t flags)
 int bt_conn_send_cb(struct bt_conn *conn, struct net_buf *buf,
 		    bt_conn_tx_cb_t cb)
 {
-	struct net_buf_pool *pool;
-
 	BT_DBG("conn handle %u buf len %u cb %p", conn->handle, buf->len, cb);
-
-	pool = net_buf_pool_get(buf->pool_id);
-	if (pool->user_data_size < BT_BUF_USER_DATA_MIN) {
-		BT_ERR("Too small user data size");
-		net_buf_unref(buf);
-		return -EINVAL;
-	}
 
 	if (conn->state != BT_CONN_CONNECTED) {
 		BT_ERR("not connected!");
@@ -1209,7 +1215,11 @@ static struct net_buf *create_frag(struct bt_conn *conn, struct net_buf *buf)
 	struct net_buf *frag;
 	u16_t frag_len;
 
+#if CONFIG_BT_L2CAP_TX_FRAG_COUNT > 0
+	frag = bt_conn_create_pdu(&frag_pool, 0);
+#else
 	frag = bt_conn_create_pdu(NULL, 0);
+#endif
 
 	if (conn->state != BT_CONN_CONNECTED) {
 		net_buf_unref(frag);
@@ -1279,6 +1289,8 @@ static void conn_cleanup(struct bt_conn *conn)
 	}
 
 	__ASSERT(sys_slist_is_empty(&conn->tx_pending), "Pending TX packets");
+
+	bt_conn_notify_tx(conn);
 
 	bt_conn_reset_rx_state(conn);
 
@@ -2059,6 +2071,28 @@ int bt_conn_auth_pairing_confirm(struct bt_conn *conn)
 	}
 }
 #endif /* CONFIG_BT_SMP || CONFIG_BT_BREDR */
+
+u8_t bt_conn_get_id(struct bt_conn *conn)
+{
+	return conn - conns;
+}
+
+struct bt_conn *bt_conn_lookup_id(u8_t id)
+{
+	struct bt_conn *conn;
+
+	if (id >= ARRAY_SIZE(conns)) {
+		return NULL;
+	}
+
+	conn = &conns[id];
+
+	if (!atomic_get(&conn->ref)) {
+		return NULL;
+	}
+
+	return bt_conn_ref(conn);
+}
 
 int bt_conn_init(void)
 {

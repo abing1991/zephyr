@@ -14,10 +14,6 @@
 #ifndef _UTIL__H_
 #define _UTIL__H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #ifndef _ASMLANGUAGE
 
 #include <zephyr/types.h>
@@ -41,12 +37,18 @@ extern "C" {
 		!__builtin_types_compatible_p(__typeof__(array), \
 					      __typeof__(&(array)[0])))
 
+#if defined(__cplusplus)
+template < class T, size_t N >
+constexpr size_t ARRAY_SIZE(T(&)[N]) { return N; }
+
+#else
 /* Evaluates to number of elements in an array; compile error if not
  * an array (e.g. pointer)
  */
 #define ARRAY_SIZE(array) \
 	((unsigned long) (IS_ARRAY(array) + \
 		(sizeof(array) / sizeof((array)[0]))))
+#endif
 
 /* Evaluates to 1 if ptr is part of array, 0 otherwise; compile error if
  * "array" argument is not an array (e.g. "ptr" and "array" mixed up)
@@ -172,8 +174,155 @@ static inline s64_t arithmetic_shift_right(s64_t value, u8_t shift)
  */
 #define _IS_ENABLED3(ignore_this, val, ...) val
 
-#ifdef __cplusplus
-}
-#endif
+/**
+ * Macros for doing code-generation with the preprocessor.
+ *
+ * Generally it is better to generate code with the preprocessor than
+ * to copy-paste code or to generate code with the build system /
+ * python script's etc.
+ *
+ * http://stackoverflow.com/a/12540675
+ */
+#define UTIL_EMPTY(...)
+#define UTIL_DEFER(...) __VA_ARGS__ UTIL_EMPTY()
+#define UTIL_OBSTRUCT(...) __VA_ARGS__ UTIL_DEFER(UTIL_EMPTY)()
+#define UTIL_EXPAND(...) __VA_ARGS__
+
+#define UTIL_EVAL(...)  UTIL_EVAL1(UTIL_EVAL1(UTIL_EVAL1(__VA_ARGS__)))
+#define UTIL_EVAL1(...) UTIL_EVAL2(UTIL_EVAL2(UTIL_EVAL2(__VA_ARGS__)))
+#define UTIL_EVAL2(...) UTIL_EVAL3(UTIL_EVAL3(UTIL_EVAL3(__VA_ARGS__)))
+#define UTIL_EVAL3(...) UTIL_EVAL4(UTIL_EVAL4(UTIL_EVAL4(__VA_ARGS__)))
+#define UTIL_EVAL4(...) UTIL_EVAL5(UTIL_EVAL5(UTIL_EVAL5(__VA_ARGS__)))
+#define UTIL_EVAL5(...) __VA_ARGS__
+
+#define UTIL_CAT(a, ...) UTIL_PRIMITIVE_CAT(a, __VA_ARGS__)
+#define UTIL_PRIMITIVE_CAT(a, ...) a##__VA_ARGS__
+
+#define UTIL_INC(x) UTIL_PRIMITIVE_CAT(UTIL_INC_, x)
+#define UTIL_INC_0 1
+#define UTIL_INC_1 2
+#define UTIL_INC_2 3
+#define UTIL_INC_3 4
+#define UTIL_INC_4 5
+#define UTIL_INC_5 6
+#define UTIL_INC_6 7
+#define UTIL_INC_7 8
+#define UTIL_INC_8 9
+#define UTIL_INC_9 10
+#define UTIL_INC_10 11
+#define UTIL_INC_11 12
+#define UTIL_INC_12 13
+#define UTIL_INC_13 14
+#define UTIL_INC_14 15
+#define UTIL_INC_15 16
+#define UTIL_INC_16 17
+#define UTIL_INC_17 18
+#define UTIL_INC_18 19
+#define UTIL_INC_19 19
+
+#define UTIL_DEC(x) UTIL_PRIMITIVE_CAT(UTIL_DEC_, x)
+#define UTIL_DEC_0 0
+#define UTIL_DEC_1 0
+#define UTIL_DEC_2 1
+#define UTIL_DEC_3 2
+#define UTIL_DEC_4 3
+#define UTIL_DEC_5 4
+#define UTIL_DEC_6 5
+#define UTIL_DEC_7 6
+#define UTIL_DEC_8 7
+#define UTIL_DEC_9 8
+#define UTIL_DEC_10 9
+#define UTIL_DEC_11 10
+#define UTIL_DEC_12 11
+#define UTIL_DEC_13 12
+#define UTIL_DEC_14 13
+#define UTIL_DEC_15 14
+#define UTIL_DEC_16 15
+#define UTIL_DEC_17 16
+#define UTIL_DEC_18 17
+#define UTIL_DEC_19 18
+#define UTIL_DEC_20 19
+#define UTIL_DEC_21 20
+#define UTIL_DEC_22 21
+#define UTIL_DEC_23 22
+#define UTIL_DEC_24 23
+#define UTIL_DEC_25 24
+#define UTIL_DEC_26 25
+#define UTIL_DEC_27 26
+#define UTIL_DEC_28 27
+#define UTIL_DEC_29 28
+#define UTIL_DEC_30 29
+#define UTIL_DEC_31 30
+#define UTIL_DEC_32 31
+#define UTIL_DEC_33 32
+#define UTIL_DEC_34 33
+#define UTIL_DEC_35 34
+#define UTIL_DEC_36 35
+#define UTIL_DEC_37 36
+#define UTIL_DEC_38 37
+#define UTIL_DEC_39 38
+#define UTIL_DEC_40 39
+
+#define UTIL_CHECK_N(x, n, ...) n
+#define UTIL_CHECK(...) UTIL_CHECK_N(__VA_ARGS__, 0,)
+
+#define UTIL_NOT(x) UTIL_CHECK(UTIL_PRIMITIVE_CAT(UTIL_NOT_, x))
+#define UTIL_NOT_0 ~, 1,
+
+#define UTIL_COMPL(b) UTIL_PRIMITIVE_CAT(UTIL_COMPL_, b)
+#define UTIL_COMPL_0 1
+#define UTIL_COMPL_1 0
+
+#define UTIL_BOOL(x) UTIL_COMPL(UTIL_NOT(x))
+
+#define UTIL_IIF(c) UTIL_PRIMITIVE_CAT(UTIL_IIF_, c)
+#define UTIL_IIF_0(t, ...) __VA_ARGS__
+#define UTIL_IIF_1(t, ...) t
+
+#define UTIL_IF(c) UTIL_IIF(UTIL_BOOL(c))
+
+#define UTIL_EAT(...)
+#define UTIL_EXPAND(...) __VA_ARGS__
+#define UTIL_WHEN(c) UTIL_IF(c)(UTIL_EXPAND, UTIL_EAT)
+
+#define UTIL_REPEAT(count, macro, ...)			    \
+	UTIL_WHEN(count)				    \
+	(						    \
+		UTIL_OBSTRUCT(UTIL_REPEAT_INDIRECT) ()	    \
+		(					    \
+			UTIL_DEC(count), macro, __VA_ARGS__ \
+		)					    \
+		UTIL_OBSTRUCT(macro)			    \
+		(					    \
+			UTIL_DEC(count), __VA_ARGS__	    \
+		)					    \
+	)
+#define UTIL_REPEAT_INDIRECT() UTIL_REPEAT
+
+/**
+ * Generates a sequence of code.
+ * Useful for generating code like;
+ *
+ * NRF_PWM0, NRF_PWM1, NRF_PWM2,
+ *
+ * @arg LEN: The length of the sequence. Must be defined and less than
+ * 20.
+ *
+ * @arg F(i, F_ARG): A macro function that accepts two arguments.
+ *  F is called repeatedly, the first argument
+ *  is the index in the sequence, and the second argument is the third
+ *  argument given to UTIL_LISTIFY.
+ *
+ * Example:
+ *
+ *    \#define FOO(i, _) NRF_PWM ## i ,
+ *    { UTIL_LISTIFY(PWM_COUNT, FOO) }
+ *    // The above two lines will generate the below:
+ *    { NRF_PWM0 , NRF_PWM1 , }
+ *
+ * @note Calling UTIL_LISTIFY with undefined arguments has undefined
+ * behavior.
+ */
+#define UTIL_LISTIFY(LEN, F, F_ARG) UTIL_EVAL(UTIL_REPEAT(LEN, F, F_ARG))
 
 #endif /* _UTIL__H_ */

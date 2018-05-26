@@ -63,6 +63,12 @@ static int mtls_ccm_encrypt_auth(struct cipher_ctx *ctx,
 		return -EINVAL;
 	}
 
+	/* This is equivalent to what the TinyCrypt shim does in
+	 * do_ccm_encrypt_mac().
+	 */
+	apkt->pkt->out_len = apkt->pkt->in_len;
+	apkt->pkt->out_len += ctx->mode_params.ccm_info.tag_len;
+
 	return 0;
 }
 
@@ -87,6 +93,9 @@ static int mtls_ccm_decrypt_auth(struct cipher_ctx *ctx,
 		return -EINVAL;
 	}
 
+	apkt->pkt->out_len = apkt->pkt->in_len;
+	apkt->pkt->out_len += ctx->mode_params.ccm_info.tag_len;
+
 	return 0;
 }
 
@@ -104,7 +113,7 @@ static int mtls_get_unused_session_index(void)
 	return -1;
 }
 
-int mtls_session_setup(struct device *dev, struct cipher_ctx *ctx,
+static int mtls_session_setup(struct device *dev, struct cipher_ctx *ctx,
 		       enum cipher_algo algo, enum cipher_mode mode,
 		       enum cipher_op op_type)
 {
@@ -162,7 +171,7 @@ int mtls_session_setup(struct device *dev, struct cipher_ctx *ctx,
 	return ret;
 }
 
-int mtls_session_free(struct device *dev, struct cipher_ctx *ctx)
+static int mtls_session_free(struct device *dev, struct cipher_ctx *ctx)
 {
 	struct mtls_shim_session *mtls_session =
 		(struct mtls_shim_session *)ctx->drv_sessn_state;
@@ -173,7 +182,7 @@ int mtls_session_free(struct device *dev, struct cipher_ctx *ctx)
 	return 0;
 }
 
-int mtls_query_caps(struct device *dev)
+static int mtls_query_caps(struct device *dev)
 {
 	return MTLS_SUPPORT;
 }

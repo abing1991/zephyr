@@ -16,12 +16,14 @@
 /**
  * @brief IPv4/IPv6 primitives and helpers
  * @defgroup ip_4_6 IPv4/IPv6 primitives and helpers
+ * @ingroup networking
  * @{
  */
 
 #include <string.h>
 #include <zephyr/types.h>
 #include <stdbool.h>
+#include <misc/util.h>
 #include <misc/byteorder.h>
 #include <toolchain.h>
 
@@ -30,6 +32,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Specifying VLAN tag here in order to avoid circular dependencies */
+#define NET_VLAN_TAG_UNSPEC 0x0fff
 
 /** Protocol families */
 #define PF_UNSPEC	0	/* Unspecified.  */
@@ -126,7 +131,7 @@ struct sockaddr_in_ptr {
 #define NET_SOCKADDR_MAX_SIZE (sizeof(struct sockaddr_in))
 #define NET_SOCKADDR_PTR_MAX_SIZE (sizeof(struct sockaddr_in_ptr))
 #else
-#if !defined(CONFIG_NET_L2_RAW_CHANNEL)
+#if !defined(CONFIG_NET_RAW_MODE)
 #error "Either IPv6 or IPv4 needs to be selected."
 #else
 #define NET_SOCKADDR_MAX_SIZE (sizeof(struct sockaddr_in6))
@@ -167,6 +172,9 @@ struct net_addr {
 #define IN6ADDR_LOOPBACK_INIT { { { 0, 0, 0, 0, 0, 0, 0, \
 				0, 0, 0, 0, 0, 0, 0, 0, 1 } } }
 
+extern const struct in6_addr in6addr_any;
+extern const struct in6_addr in6addr_loopback;
+
 #define INET6_ADDRSTRLEN 46
 #define NET_IPV6_ADDR_LEN sizeof("xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx")
 #define NET_IPV4_ADDR_LEN sizeof("xxx.xxx.xxx.xxx")
@@ -175,6 +183,7 @@ struct net_addr {
 #define INADDR_ANY_INIT { { { INADDR_ANY } } }
 
 #define NET_IPV6_MTU 1280
+#define NET_IPV4_MTU  576
 
 /** IPv6 extension headers types */
 #define NET_IPV6_NEXTHDR_HBHO        0
@@ -182,6 +191,18 @@ struct net_addr {
 #define NET_IPV6_NEXTHDR_ROUTING     43
 #define NET_IPV6_NEXTHDR_FRAG        44
 #define NET_IPV6_NEXTHDR_NONE        59
+
+/** Network packet priority settings described in IEEE 802.1Q Annex I.1 */
+enum net_priority {
+	NET_PRIORITY_BK = 0, /* Background (lowest)                */
+	NET_PRIORITY_BE = 1, /* Best effort (default)              */
+	NET_PRIORITY_EE = 2, /* Excellent effort                   */
+	NET_PRIORITY_CA = 3, /* Critical applications (highest)    */
+	NET_PRIORITY_VI = 4, /* Video, < 100 ms latency and jitter */
+	NET_PRIORITY_VO = 5, /* Voice, < 10 ms latency and jitter  */
+	NET_PRIORITY_IC = 6, /* Internetwork control               */
+	NET_PRIORITY_NC = 7  /* Network control                    */
+};
 
 /** IPv6/IPv4 network connection tuple */
 struct net_tuple {
@@ -203,6 +224,7 @@ enum net_addr_type {
 	NET_ADDR_AUTOCONF,
 	NET_ADDR_DHCP,
 	NET_ADDR_MANUAL,
+	NET_ADDR_OVERRIDABLE,
 };
 
 #if NET_LOG_ENABLED > 0
@@ -215,6 +237,8 @@ static inline char *net_addr_type2str(enum net_addr_type type)
 		return "DHCP";
 	case NET_ADDR_MANUAL:
 		return "MANUAL";
+	case NET_ADDR_OVERRIDABLE:
+		return "OVERRIDE";
 	case NET_ADDR_ANY:
 	default:
 		break;
@@ -341,6 +365,7 @@ static inline bool net_is_ipv6_addr_mcast(const struct in6_addr *addr)
 }
 
 struct net_if;
+struct net_if_config;
 
 extern struct net_if_addr *net_if_ipv6_addr_lookup(const struct in6_addr *addr,
 						   struct net_if **iface);
@@ -433,7 +458,7 @@ static inline bool net_is_ipv4_addr_loopback(struct in_addr *addr)
  */
 static inline bool net_is_ipv4_addr_unspecified(const struct in_addr *addr)
 {
-	return addr->s_addr == 0;
+	return UNALIGNED_GET(&addr->s_addr) == 0;
 }
 
 /**
@@ -445,7 +470,19 @@ static inline bool net_is_ipv4_addr_unspecified(const struct in_addr *addr)
  */
 static inline bool net_is_ipv4_addr_mcast(const struct in_addr *addr)
 {
-	return (addr->s_addr & 0xE0000000) == 0xE0000000;
+	return (ntohl(UNALIGNED_GET(&addr->s_addr)) & 0xE0000000) == 0xE0000000;
+}
+
+/**
+ * @brief Check if the given IPv4 address is a link local address.
+ *
+ * @param addr A valid pointer on an IPv4 address
+ *
+ * @return True if it is, false otherwise.
+ */
+static inline bool net_is_ipv4_ll_addr(const struct in_addr *addr)
+{
+	return (ntohl(UNALIGNED_GET(&addr->s_addr)) & 0xA9FE0000) == 0xA9FE0000;
 }
 
 extern struct net_if_addr *net_if_ipv4_addr_lookup(const struct in_addr *addr,
@@ -922,6 +959,69 @@ static inline s32_t net_tcp_seq_cmp(u32_t seq1, u32_t seq2)
 static inline bool net_tcp_seq_greater(u32_t seq1, u32_t seq2)
 {
 	return net_tcp_seq_cmp(seq1, seq2) > 0;
+}
+
+/**
+ * @brief Convert a string of hex values to array of bytes.
+ *
+ * @details The syntax of the string is "ab:02:98:fa:42:01"
+ *
+ * @param buf Pointer to memory where the bytes are written.
+ * @param buf_len Length of the memory area.
+ * @param src String of bytes.
+ *
+ * @return 0 if ok, <0 if error
+ */
+int net_bytes_from_str(u8_t *buf, int buf_len, const char *src);
+
+/**
+ * @brief Convert Tx network packet priority to traffic class so we can place
+ * the packet into correct Tx queue.
+ *
+ * @param prio Network priority
+ *
+ * @return Tx traffic class that handles that priority network traffic.
+ */
+int net_tx_priority2tc(enum net_priority prio);
+
+/**
+ * @brief Convert Rx network packet priority to traffic class so we can place
+ * the packet into correct Rx queue.
+ *
+ * @param prio Network priority
+ *
+ * @return Rx traffic class that handles that priority network traffic.
+ */
+int net_rx_priority2tc(enum net_priority prio);
+
+/**
+ * @brief Convert network packet VLAN priority to network packet priority so we
+ * can place the packet into correct queue.
+ *
+ * @param priority VLAN priority
+ *
+ * @return Network priority
+ */
+static inline enum net_priority net_vlan2priority(u8_t priority)
+{
+	/* Map according to IEEE 802.1Q */
+	static const u8_t vlan2priority[] = {
+		NET_PRIORITY_BE,
+		NET_PRIORITY_BK,
+		NET_PRIORITY_EE,
+		NET_PRIORITY_CA,
+		NET_PRIORITY_VI,
+		NET_PRIORITY_VO,
+		NET_PRIORITY_IC,
+		NET_PRIORITY_NC
+	};
+
+	if (priority >= ARRAY_SIZE(vlan2priority)) {
+		/* Use Best Effort as the default priority */
+		return NET_PRIORITY_BE;
+	}
+
+	return vlan2priority[priority];
 }
 
 #ifdef __cplusplus

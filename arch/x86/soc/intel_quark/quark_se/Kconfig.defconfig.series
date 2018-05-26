@@ -12,25 +12,8 @@ config SOC_SERIES
 config X86_IAMCU
 	def_bool y
 
-config TOOLCHAIN_VARIANT
-	default "iamcu" if X86_IAMCU
-	default "" if !X86_IAMCU
-
-if !HAS_DTS
-config PHYS_RAM_ADDR
-	default 0xA8006400
-endif
-
-if !HAS_DTS
-config PHYS_LOAD_ADDR
-	default 0x40030000 if XIP
-endif
-
-config RAM_SIZE
-	default 55
-
-config ROM_SIZE
-	default 144
+config X86_NO_MELTDOWN
+	def_bool y
 
 config	SYS_CLOCK_HW_CYCLES_PER_SEC
 	default 32000000
@@ -64,13 +47,8 @@ config GPIO_QMSI
 config GPIO_QMSI_0
 	def_bool y
 
-config GPIO_QMSI_0_IRQ_PRI
-	default 2
-
 config GPIO_QMSI_1
 	def_bool y
-config GPIO_QMSI_1_IRQ_PRI
-	default 2
 endif # GPIO
 
 if I2C
@@ -80,25 +58,8 @@ config I2C_QMSI
 config I2C_0
 	def_bool y
 
-if I2C_0
-
-config I2C_0_IRQ_PRI
-	default 2
-config I2C_0_DEFAULT_CFG
-	default 0x12
-
-endif # I2C_0
-
 config I2C_1
 	def_bool y
-
-if I2C_1
-config I2C_1_IRQ_PRI
-	default 2
-config I2C_1_DEFAULT_CFG
-	default 0x12
-
-endif # I2C_1
 
 config I2C_SDA_SETUP
 	default 2
@@ -151,7 +112,7 @@ endif
 
 
 if SPI
-config SPI_QMSI
+config SPI_DW
 	def_bool y
 
 config SPI_0
@@ -166,11 +127,21 @@ config SPI_1
 config SPI_1_IRQ_PRI
 	default 2
 
-config SPI_DW
-	def_bool n
-
 config SPI_DW_FIFO_DEPTH
 	default 7
+
+if SPI_SLAVE
+
+config SPI_2
+	def_bool y
+
+config SPI_2_OP_MODES
+	default 2
+
+config SPI_2_IRQ_PRI
+	default 2
+
+endif # SPI_SLAVE
 
 endif # SPI
 
@@ -192,24 +163,12 @@ endif # WATCHDOG
 if RTC
 config RTC_QMSI
 	def_bool y
-config RTC_0_IRQ_PRI
-	default 2
 endif # RTC
 
 if BT_H4
 
-if !HAS_DTS
-config BT_UART_ON_DEV_NAME
-	default UART_QMSI_0_NAME
-endif
-
 config UART_QMSI_0
 	def_bool y
-
-if !HAS_DTS
-config UART_QMSI_0_BAUDRATE
-	default 1000000
-endif
 
 config UART_QMSI_0_HW_FC
 	def_bool y
@@ -218,32 +177,10 @@ endif # BT_H4
 
 if UART_QMSI
 
-if UART_QMSI_0
-
-config UART_QMSI_0_IRQ_PRI
-	default 3
-
-endif # UART_QMSI_0
-
 config UART_QMSI_1
 	def_bool y
 
-if UART_QMSI_1
-
-config UART_QMSI_1_IRQ_PRI
-	default 3
-
-endif # UART_QMSI_1
-
 endif # UART_QMSI
-
-if UART_CONSOLE && !HAS_DTS
-
-config UART_CONSOLE_ON_DEV_NAME
-	default "UART_1"  if USB_UART_CONSOLE = n
-	default "CDC_ACM" if USB_UART_CONSOLE
-
-endif
 
 if SOC_FLASH_QMSI
 config SOC_FLASH_QMSI_SYS_SIZE
@@ -258,11 +195,13 @@ endif
 if USB
 config USB_DW
 	def_bool y
+config GPIO
+	def_bool y
 config USB_DW_IRQ_PRI
 	default 3
 endif # USB
 
-source "arch/x86/soc/intel_quark/quark_se/Kconfig.defconfig.quark_se*"
-source "arch/x86/soc/intel_quark/quark_se/Kconfig.defconfig.curie*"
+gsource "arch/x86/soc/intel_quark/quark_se/Kconfig.defconfig.quark_se*"
+gsource "arch/x86/soc/intel_quark/quark_se/Kconfig.defconfig.curie*"
 
 endif # SOC_SERIES_QUARK_SE

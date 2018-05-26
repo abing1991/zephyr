@@ -32,9 +32,6 @@ config UART_MCUX_4
 
 endif # UART_MCUX
 
-config PINMUX
-	def_bool y
-
 if PINMUX_MCUX
 
 config PINMUX_MCUX_PORTA
@@ -88,33 +85,10 @@ if ADC
 config ADC_0
 	def_bool y
 
+config BATTERY_SENSE
+	def_bool y
+
 endif # ADC
-
-if FXOS8700
-
-config FXOS8700_I2C_ADDRESS
-	default 0x1e
-
-config FXOS8700_GPIO_NAME
-	default GPIO_MCUX_PORTD_NAME
-
-config FXOS8700_GPIO_PIN
-	default 13
-
-endif # FXOS8700
-
-if FXAS21002
-
-config FXAS21002_I2C_ADDRESS
-	default 0x20
-
-config FXAS21002_GPIO_NAME
-	default GPIO_MCUX_PORTC_NAME
-
-config FXAS21002_GPIO_PIN
-	default 18
-
-endif # FXAS21002
 
 if PWM_MCUX_FTM
 
@@ -128,20 +102,11 @@ if SPI
 config SPI_0
 	def_bool y
 
-config SPI_0_IRQ_PRI
-	default 3
-
 config SPI_1
 	def_bool n
 
-config SPI_1_IRQ_PRI
-	default 3
-
 config SPI_2
 	def_bool n
-
-config SPI_2_IRQ_PRI
-	default 3
 
 endif # SPI
 

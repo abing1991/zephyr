@@ -34,16 +34,12 @@
 #include <net/net_ip.h>
 #include <net/buf.h>
 #include <net/net_pkt.h>
+#include <net/udp.h>
+#include <net/tcp.h>
 
 #include "net_private.h"
-
-/* Available (free) buffers queue */
-#define NET_PKT_RX_COUNT	CONFIG_NET_PKT_RX_COUNT
-#define NET_PKT_TX_COUNT	CONFIG_NET_PKT_TX_COUNT
-#define NET_BUF_RX_COUNT	CONFIG_NET_BUF_RX_COUNT
-#define NET_BUF_TX_COUNT	CONFIG_NET_BUF_TX_COUNT
-#define NET_BUF_DATA_LEN	CONFIG_NET_BUF_DATA_SIZE
-#define NET_BUF_USER_DATA_LEN	CONFIG_NET_BUF_USER_DATA_SIZE
+#include "tcp_internal.h"
+#include "rpl.h"
 
 #if defined(CONFIG_NET_TCP)
 #define APP_PROTO_LEN NET_TCPH_LEN
@@ -55,7 +51,7 @@
 #endif /* UDP */
 #endif /* TCP */
 
-#if defined(CONFIG_NET_IPV6) || defined(CONFIG_NET_L2_RAW_CHANNEL)
+#if defined(CONFIG_NET_IPV6) || defined(CONFIG_NET_RAW_MODE)
 #define IP_PROTO_LEN NET_IPV6H_LEN
 #else
 #if defined(CONFIG_NET_IPV4)
@@ -71,7 +67,7 @@
  * fragment. This makes possible to cast a protocol header
  * struct into memory area.
  */
-#if NET_BUF_DATA_LEN < (IP_PROTO_LEN + APP_PROTO_LEN)
+#if CONFIG_NET_BUF_DATA_SIZE < (IP_PROTO_LEN + APP_PROTO_LEN)
 #if defined(STRING2)
 #undef STRING2
 #endif
@@ -80,20 +76,17 @@
 #endif
 #define STRING2(x) #x
 #define STRING(x) STRING2(x)
-#pragma message "Data len " STRING(NET_BUF_DATA_LEN)
+#pragma message "Data len " STRING(CONFIG_NET_BUF_DATA_SIZE)
 #pragma message "Minimum len " STRING(IP_PROTO_LEN + APP_PROTO_LEN)
 #error "Too small net_buf fragment size"
 #endif
 
-K_MEM_SLAB_DEFINE(rx_pkts, sizeof(struct net_pkt), NET_PKT_RX_COUNT, 4);
-K_MEM_SLAB_DEFINE(tx_pkts, sizeof(struct net_pkt), NET_PKT_TX_COUNT, 4);
+NET_PKT_SLAB_DEFINE(rx_pkts, CONFIG_NET_PKT_RX_COUNT);
+NET_PKT_SLAB_DEFINE(tx_pkts, CONFIG_NET_PKT_TX_COUNT);
 
 /* The data fragment pool is for storing network data. */
-NET_BUF_POOL_DEFINE(rx_bufs, NET_BUF_RX_COUNT, NET_BUF_DATA_LEN,
-		    NET_BUF_USER_DATA_LEN, NULL);
-
-NET_BUF_POOL_DEFINE(tx_bufs, NET_BUF_TX_COUNT, NET_BUF_DATA_LEN,
-		    NET_BUF_USER_DATA_LEN, NULL);
+NET_PKT_DATA_POOL_DEFINE(rx_bufs, CONFIG_NET_BUF_RX_COUNT);
+NET_PKT_DATA_POOL_DEFINE(tx_bufs, CONFIG_NET_BUF_TX_COUNT);
 
 #if defined(CONFIG_NET_DEBUG_NET_PKT)
 
@@ -119,8 +112,10 @@ struct net_pkt_alloc {
 	bool is_pkt;
 };
 
-#define MAX_NET_PKT_ALLOCS (NET_PKT_RX_COUNT + NET_PKT_TX_COUNT + \
-			    NET_BUF_RX_COUNT + NET_BUF_TX_COUNT + \
+#define MAX_NET_PKT_ALLOCS (CONFIG_NET_PKT_RX_COUNT + \
+			    CONFIG_NET_PKT_TX_COUNT + \
+			    CONFIG_NET_BUF_RX_COUNT + \
+			    CONFIG_NET_BUF_TX_COUNT + \
 			    CONFIG_NET_DEBUG_NET_PKT_EXTERNALS)
 
 static struct net_pkt_alloc net_pkt_allocs[MAX_NET_PKT_ALLOCS];
@@ -260,7 +255,7 @@ void net_pkt_print_frags(struct net_pkt *pkt)
 {
 	struct net_buf *frag;
 	size_t total = 0;
-	int count = -1, frag_size = 0, ll_overhead = 0;
+	int count = 0, frag_size = 0, ll_overhead = 0;
 
 	if (!pkt) {
 		NET_INFO("pkt %p", pkt);
@@ -278,12 +273,9 @@ void net_pkt_print_frags(struct net_pkt *pkt)
 		frag_size = frag->size;
 		ll_overhead = net_buf_headroom(frag);
 
-		NET_INFO("[%d] frag %p len %d size %d reserve %d "
-			 "pool %p [sz %d ud_sz %d]",
+		NET_INFO("[%d] frag %p len %d size %d reserve %d pool %p",
 			 count, frag, frag->len, frag_size, ll_overhead,
-			 net_buf_pool_get(frag->pool_id),
-			 net_buf_pool_get(frag->pool_id)->buf_size,
-			 net_buf_pool_get(frag->pool_id)->user_data_size);
+			 net_buf_pool_get(frag->pool_id));
 
 		count++;
 
@@ -293,7 +285,7 @@ void net_pkt_print_frags(struct net_pkt *pkt)
 	NET_INFO("Total data size %zu, occupied %d bytes, ll overhead %d, "
 		 "utilization %zu%%",
 		 total, count * frag_size - count * ll_overhead,
-		 count * ll_overhead, (total * 100) / (count * frag_size));
+		 count * ll_overhead, count ? (total * 100) / (count * frag_size) : 0);
 }
 
 struct net_pkt *net_pkt_get_reserve_debug(struct k_mem_slab *slab,
@@ -326,6 +318,12 @@ struct net_pkt *net_pkt_get_reserve(struct k_mem_slab *slab,
 
 	pkt->ref = 1;
 	pkt->slab = slab;
+
+#if defined(CONFIG_NET_TX_DEFAULT_PRIORITY) && (NET_TC_COUNT > 1)
+	net_pkt_set_priority(pkt, CONFIG_NET_TX_DEFAULT_PRIORITY);
+#endif
+
+	net_pkt_set_vlan_tag(pkt, NET_VLAN_TAG_UNSPEC);
 
 #if defined(CONFIG_NET_DEBUG_NET_PKT)
 	net_pkt_alloc_add(pkt, true, caller, line);
@@ -505,14 +503,17 @@ static struct net_pkt *net_pkt_get(struct k_mem_slab *slab,
 	struct in6_addr *addr6 = NULL;
 	struct net_if *iface;
 	struct net_pkt *pkt;
+	sa_family_t family;
 
 	if (!context) {
 		return NULL;
 	}
 
 	iface = net_context_get_iface(context);
-
-	NET_ASSERT(iface);
+	if (!iface) {
+		NET_ERR("Context has no interface");
+		return NULL;
+	}
 
 	if (net_context_get_family(context) == AF_INET6) {
 		addr6 = &((struct sockaddr_in6 *) &context->remote)->sin6_addr;
@@ -526,14 +527,63 @@ static struct net_pkt *net_pkt_get(struct k_mem_slab *slab,
 	pkt = net_pkt_get_reserve(slab, net_if_get_ll_reserve(iface, addr6),
 				  timeout);
 #endif
-	if (pkt) {
-		net_pkt_set_context(pkt, context);
-		net_pkt_set_iface(pkt, iface);
+	if (!pkt) {
+		return NULL;
+	}
 
-		if (context) {
-			net_pkt_set_family(pkt,
-					   net_context_get_family(context));
+	net_pkt_set_context(pkt, context);
+	net_pkt_set_iface(pkt, iface);
+	family = net_context_get_family(context);
+	net_pkt_set_family(pkt, family);
+
+#if defined(CONFIG_NET_CONTEXT_PRIORITY) && (NET_TC_COUNT > 1)
+	{
+		u8_t prio;
+
+		if (net_context_get_option(context, NET_OPT_PRIORITY, &prio,
+					   NULL) == 0) {
+			net_pkt_set_priority(pkt, prio);
 		}
+	}
+#endif /* CONFIG_NET_CONTEXT_PRIORITY */
+
+	if (slab != &rx_pkts) {
+		uint16_t iface_len, data_len = 0;
+		enum net_ip_protocol proto;
+
+		iface_len = net_if_get_mtu(iface);
+
+		if (IS_ENABLED(CONFIG_NET_IPV6) && family == AF_INET6) {
+			data_len = max(iface_len, NET_IPV6_MTU);
+			data_len -= NET_IPV6H_LEN;
+		}
+
+		if (IS_ENABLED(CONFIG_NET_IPV4) && family == AF_INET) {
+			data_len = max(iface_len, NET_IPV4_MTU);
+			data_len -= NET_IPV4H_LEN;
+		}
+
+		proto = net_context_get_ip_proto(context);
+
+		if (IS_ENABLED(CONFIG_NET_TCP) && proto == IPPROTO_TCP) {
+			data_len -= NET_TCPH_LEN;
+			data_len -= NET_TCP_MAX_OPT_SIZE;
+		}
+
+		if (IS_ENABLED(CONFIG_NET_UDP) && proto == IPPROTO_UDP) {
+			data_len -= NET_UDPH_LEN;
+
+#if defined(CONFIG_NET_RPL_INSERT_HBH_OPTION)
+			data_len -= NET_RPL_HOP_BY_HOP_LEN;
+#endif
+
+		}
+
+		if (proto == IPPROTO_ICMP || proto == IPPROTO_ICMPV6) {
+			data_len -= NET_ICMPH_LEN;
+		}
+
+		pkt->data_len = data_len;
 	}
 
 	return pkt;
@@ -559,8 +609,10 @@ static struct net_buf *_pkt_get_data(struct net_buf_pool *pool,
 	}
 
 	iface = net_context_get_iface(context);
-
-	NET_ASSERT(iface);
+	if (!iface) {
+		NET_ERR("Context has no interface");
+		return NULL;
+	}
 
 	if (net_context_get_family(context) == AF_INET6) {
 		addr6 = &((struct sockaddr_in6 *) &context->remote)->sin6_addr;
@@ -1170,8 +1222,10 @@ u16_t net_pkt_append(struct net_pkt *pkt, u16_t len, const u8_t *data,
 		    s32_t timeout)
 {
 	struct net_buf *frag;
+	struct net_context *ctx = NULL;
+	u16_t max_len, appended;
 
-	if (!pkt || !data) {
+	if (!pkt || !data || !len) {
 		return 0;
 	}
 
@@ -1184,11 +1238,39 @@ u16_t net_pkt_append(struct net_pkt *pkt, u16_t len, const u8_t *data,
 		net_pkt_frag_add(pkt, frag);
 	}
 
-	return net_pkt_append_bytes(pkt, data, len, timeout);
+	if (pkt->slab != &rx_pkts) {
+		ctx = net_pkt_context(pkt);
+	}
+
+	if (ctx) {
+		/* Make sure we don't send more data in one packet than
+		 * protocol or MTU allows when there is a context for the
+		 * packet.
+		 */
+		max_len = pkt->data_len;
+
+#if defined(CONFIG_NET_TCP)
+		if (ctx->tcp && (ctx->tcp->send_mss < max_len)) {
+			max_len = ctx->tcp->send_mss;
+		}
+#endif
+
+		if (len > max_len) {
+			len = max_len;
+		}
+	}
+
+	appended = net_pkt_append_bytes(pkt, data, len, timeout);
+
+	if (ctx) {
+		pkt->data_len -= appended;
+	}
+
+	return appended;
 }
 
 /* Helper routine to retrieve single byte from fragment and move
- * offset. If required byte is last byte in framgent then return
+ * offset. If required byte is last byte in fragment then return
  * next fragment and set offset = 0.
  */
 static inline struct net_buf *net_frag_read_byte(struct net_buf *frag,
@@ -1222,11 +1304,7 @@ static inline struct net_buf *adjust_offset(struct net_buf *frag,
 	}
 
 	while (frag) {
-		if (offset == frag->len) {
-			*pos = 0;
-
-			return frag->frags;
-		} else if (offset < frag->len) {
+		if (offset < frag->len) {
 			*pos = offset;
 
 			return frag;
@@ -1235,8 +1313,6 @@ static inline struct net_buf *adjust_offset(struct net_buf *frag,
 		offset -= frag->len;
 		frag = frag->frags;
 	}
-
-	NET_ERR("Invalid offset (%u), failed to adjust", offset);
 
 	return NULL;
 }
@@ -1259,7 +1335,7 @@ struct net_buf *net_frag_read(struct net_buf *frag, u16_t offset,
 			frag = net_frag_read_byte(frag, *pos, pos, NULL);
 		}
 
-		/* Error: Still reamining length to be read, but no data. */
+		/* Error: Still remaining length to be read, but no data. */
 		if (!frag && len) {
 			NET_ERR("Not enough data to read");
 			goto error;
@@ -1474,8 +1550,14 @@ static inline bool insert_data(struct net_pkt *pkt, struct net_buf *frag,
 	do {
 		u16_t count = min(len, net_buf_tailroom(frag));
 
-		/* Copy insert data */
-		memcpy(frag->data + offset, data, count);
+		if (data) {
+			/* Copy insert data */
+			memcpy(frag->data + offset, data, count);
+		} else {
+			/* If there is no data, just clear the area */
+			memset(frag->data + offset, 0, count);
+		}
+
 		net_buf_add(frag, count);
 
 		len -= count;
@@ -1496,7 +1578,10 @@ static inline bool insert_data(struct net_pkt *pkt, struct net_buf *frag,
 			return true;
 		}
 
-		data += count;
+		if (data) {
+			data += count;
+		}
+
 		offset = 0;
 
 		insert = net_pkt_get_frag(pkt, timeout);
@@ -1654,6 +1739,115 @@ void net_pkt_get_info(struct k_mem_slab **rx,
 	}
 }
 
+static int net_pkt_get_addr(struct net_pkt *pkt, bool is_src,
+			    struct sockaddr *addr, socklen_t addrlen)
+{
+	enum net_ip_protocol proto;
+	sa_family_t family;
+	u16_t port;
+
+	if (!addr || !pkt) {
+		return -EINVAL;
+	}
+
+	/* Set the family */
+	family = net_pkt_family(pkt);
+	addr->sa_family = family;
+
+	/* Examine the transport protocol */
+	if (IS_ENABLED(CONFIG_NET_IPV6) && family == AF_INET6) {
+		proto = NET_IPV6_HDR(pkt)->nexthdr;
+	} else if (IS_ENABLED(CONFIG_NET_IPV4) && family == AF_INET) {
+		proto = NET_IPV4_HDR(pkt)->proto;
+	} else {
+		return -ENOTSUP;
+	}
+
+	/* Get the source port from transport protocol header */
+	if (IS_ENABLED(CONFIG_NET_TCP) && proto == IPPROTO_TCP) {
+		struct net_tcp_hdr hdr, *tcp_hdr;
+
+		tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
+		if (!tcp_hdr) {
+			return -EINVAL;
+		}
+
+		if (is_src) {
+			port = tcp_hdr->src_port;
+		} else {
+			port = tcp_hdr->dst_port;
+		}
+
+	} else if (IS_ENABLED(CONFIG_NET_UDP) && proto == IPPROTO_UDP) {
+		struct net_udp_hdr hdr, *udp_hdr;
+
+		udp_hdr = net_udp_get_hdr(pkt, &hdr);
+		if (!udp_hdr) {
+			return -EINVAL;
+		}
+
+		if (is_src) {
+			port = udp_hdr->src_port;
+		} else {
+			port = udp_hdr->dst_port;
+		}
+
+	} else {
+		return -ENOTSUP;
+	}
+
+	/* Set address and port to addr */
+	if (IS_ENABLED(CONFIG_NET_IPV6) && family == AF_INET6) {
+		struct sockaddr_in6 *addr6 = net_sin6(addr);
+
+		if (addrlen < sizeof(struct sockaddr_in6)) {
+			return -EINVAL;
+		}
+
+		if (is_src) {
+			net_ipaddr_copy(&addr6->sin6_addr,
+					&NET_IPV6_HDR(pkt)->src);
+		} else {
+			net_ipaddr_copy(&addr6->sin6_addr,
+					&NET_IPV6_HDR(pkt)->dst);
+		}
+
+		addr6->sin6_port = port;
+	} else if (IS_ENABLED(CONFIG_NET_IPV4) && family == AF_INET) {
+		struct sockaddr_in *addr4 = net_sin(addr);
+
+		if (addrlen < sizeof(struct sockaddr_in)) {
+			return -EINVAL;
+		}
+
+		if (is_src) {
+			net_ipaddr_copy(&addr4->sin_addr,
+					&NET_IPV4_HDR(pkt)->src);
+		} else {
+			net_ipaddr_copy(&addr4->sin_addr,
+					&NET_IPV4_HDR(pkt)->dst);
+		}
+
+		addr4->sin_port = port;
+	} else {
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
+int net_pkt_get_src_addr(struct net_pkt *pkt, struct sockaddr *addr,
+			 socklen_t addrlen)
+{
+	return net_pkt_get_addr(pkt, true, addr, addrlen);
+}
+
+int net_pkt_get_dst_addr(struct net_pkt *pkt, struct sockaddr *addr,
+			 socklen_t addrlen)
+{
+	return net_pkt_get_addr(pkt, false, addr, addrlen);
+}
+
 #if defined(CONFIG_NET_DEBUG_NET_PKT)
 void net_pkt_print(void)
 {
@@ -1766,6 +1960,11 @@ struct net_tcp_hdr *net_pkt_tcp_data(struct net_pkt *pkt)
 		return NULL;
 	}
 
+	if (!frag->data) {
+		NET_ERR("NULL fragment data!");
+		return NULL;
+	}
+
 	return (struct net_tcp_hdr *)(frag->data + offset);
 }
 
@@ -1775,31 +1974,48 @@ struct net_pkt *net_pkt_clone(struct net_pkt *pkt, s32_t timeout)
 	struct net_buf *frag;
 	u16_t pos;
 
-	clone = net_pkt_get_reserve_tx(0, timeout);
 	if (!pkt) {
 		return NULL;
 	}
 
-	clone->frags = net_pkt_copy_all(pkt, 0, timeout);
-	if (!clone->frags) {
-		net_pkt_unref(pkt);
+	clone = net_pkt_get_reserve(pkt->slab, 0, timeout);
+	if (!clone) {
 		return NULL;
 	}
 
-	clone->slab = pkt->slab;
+	clone->frags = NULL;
+
+	if (pkt->frags) {
+		clone->frags = net_pkt_copy_all(pkt, 0, timeout);
+		if (!clone->frags) {
+			net_pkt_unref(clone);
+			return NULL;
+		}
+	}
+
 	clone->context = pkt->context;
 	clone->token = pkt->token;
 	clone->iface = pkt->iface;
 
-	frag = net_frag_get_pos(clone, net_pkt_ip_hdr_len(pkt), &pos);
+	if (clone->frags) {
+		frag = net_frag_get_pos(clone, net_pkt_ip_hdr_len(pkt), &pos);
 
-	net_pkt_set_appdata(clone, frag->data + pos);
-	net_pkt_set_appdatalen(clone, net_pkt_appdatalen(pkt));
+		net_pkt_set_appdata(clone, frag->data + pos);
+		net_pkt_set_appdatalen(clone, net_pkt_appdatalen(pkt));
+
+		/* The link header pointers are only usable if there is
+		 * a fragment that we copied because those pointers point
+		 * to start of the fragment which we do not have right now.
+		 */
+		memcpy(&clone->lladdr_src, &pkt->lladdr_src,
+		       sizeof(clone->lladdr_src));
+		memcpy(&clone->lladdr_dst, &pkt->lladdr_dst,
+		       sizeof(clone->lladdr_dst));
+	}
+
 	net_pkt_set_next_hdr(clone, NULL);
 	net_pkt_set_ip_hdr_len(clone, net_pkt_ip_hdr_len(pkt));
-
-	memcpy(&clone->lladdr_src, &pkt->lladdr_src, sizeof(clone->lladdr_src));
-	memcpy(&clone->lladdr_dst, &pkt->lladdr_dst, sizeof(clone->lladdr_dst));
+	net_pkt_set_vlan_tag(clone, net_pkt_vlan_tag(pkt));
 
 	net_pkt_set_family(clone, net_pkt_family(pkt));
 

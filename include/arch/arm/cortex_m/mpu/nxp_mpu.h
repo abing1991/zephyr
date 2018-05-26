@@ -34,6 +34,15 @@
 #define BM2_SM_SHIFT	15
 #define BM3_SM_SHIFT	21
 
+#define BM4_WE_SHIFT	24
+#define BM4_RE_SHIFT	25
+
+#ifdef CONFIG_USB_KINETIS
+#define BM4_PERMISSIONS	((1 << BM4_RE_SHIFT) | (1 << BM4_WE_SHIFT))
+#else
+#define BM4_PERMISSIONS	0
+#endif
+
 /* Read Attribute */
 #define MPU_REGION_READ  ((UM_READ << BM0_UM_SHIFT) | \
 			  (UM_READ << BM1_UM_SHIFT) | \
@@ -58,24 +67,40 @@
 			  (SM_SAME_AS_UM << BM2_SM_SHIFT) | \
 			  (SM_SAME_AS_UM << BM3_SM_SHIFT))
 
+#define MPU_REGION_SU_RX ((SM_RX_ALLOW << BM0_SM_SHIFT) | \
+			  (SM_RX_ALLOW << BM1_SM_SHIFT) | \
+			  (SM_RX_ALLOW << BM2_SM_SHIFT) | \
+			  (SM_RX_ALLOW << BM3_SM_SHIFT))
+
+#define MPU_REGION_SU_RW ((SM_RW_ALLOW << BM0_SM_SHIFT) | \
+			  (SM_RW_ALLOW << BM1_SM_SHIFT) | \
+			  (SM_RW_ALLOW << BM2_SM_SHIFT) | \
+			  (SM_RW_ALLOW << BM3_SM_SHIFT))
+
+#define MPU_REGION_SU_RWX ((SM_RWX_ALLOW << BM0_SM_SHIFT) | \
+			   (SM_RWX_ALLOW << BM1_SM_SHIFT) | \
+			   (SM_RWX_ALLOW << BM2_SM_SHIFT) | \
+			   (SM_RWX_ALLOW << BM3_SM_SHIFT))
+
 /* The ENDADDR field has the last 5 bit reserved and set to 1 */
 #define ENDADDR_ROUND(x) (x - 0x1F)
 
+#define REGION_USER_MODE_ATTR (MPU_REGION_READ | \
+				MPU_REGION_WRITE | \
+				MPU_REGION_SU)
+
 /* Some helper defines for common regions */
 #if defined(CONFIG_MPU_ALLOW_FLASH_WRITE)
-#define REGION_RAM_ATTR	  (MPU_REGION_READ | \
-			   MPU_REGION_WRITE | \
-			   MPU_REGION_EXEC | \
-			   MPU_REGION_SU)
+#define REGION_RAM_ATTR	  ((MPU_REGION_SU_RWX) | \
+			   ((UM_READ | UM_WRITE | UM_EXEC) << BM3_UM_SHIFT) | \
+			   (BM4_PERMISSIONS))
 
-#define REGION_FLASH_ATTR (MPU_REGION_READ | \
-			   MPU_REGION_WRITE | \
-			   MPU_REGION_EXEC | \
-			   MPU_REGION_SU)
+#define REGION_FLASH_ATTR (MPU_REGION_SU_RWX)
+
 #else
-#define REGION_RAM_ATTR	  (MPU_REGION_READ | \
-			   MPU_REGION_WRITE | \
-			   MPU_REGION_SU)
+#define REGION_RAM_ATTR	  ((MPU_REGION_SU_RW) | \
+			   ((UM_READ | UM_WRITE) << BM3_UM_SHIFT) | \
+			   (BM4_PERMISSIONS))
 
 #define REGION_FLASH_ATTR (MPU_REGION_READ | \
 			   MPU_REGION_EXEC | \
@@ -87,8 +112,10 @@
 			   MPU_REGION_EXEC | \
 			   MPU_REGION_SU)
 
-#define REGION_RO_ATTR	  (MPU_REGION_READ | \
-			   MPU_REGION_SU)
+#define REGION_RO_ATTR	  (MPU_REGION_READ | MPU_REGION_SU)
+
+#define REGION_USER_RO_ATTR (MPU_REGION_READ | \
+			     MPU_REGION_SU)
 
 #define REGION_DEBUG_ATTR  MPU_REGION_SU
 

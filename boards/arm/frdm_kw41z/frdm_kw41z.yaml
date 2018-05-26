@@ -7,3 +7,8 @@ toolchain:
   - gccarmemb
 supported:
   - ieee802154
+  - adc
+  - i2c
+  - spi
+  - gpio
+  - rtc

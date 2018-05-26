@@ -24,7 +24,6 @@
 #include <net/ethernet.h>
 #include <net/udp.h>
 
-#include <tc_util.h>
 #include <ztest.h>
 
 #if defined(CONFIG_NET_DEBUG_UDP)
@@ -106,10 +105,13 @@ static inline struct in_addr *if_get_addr(struct net_if *iface)
 	int i;
 
 	for (i = 0; i < NET_IF_MAX_IPV4_ADDR; i++) {
-		if (iface->ipv4.unicast[i].is_used &&
-		    iface->ipv4.unicast[i].address.family == AF_INET &&
-		    iface->ipv4.unicast[i].addr_state == NET_ADDR_PREFERRED) {
-			return &iface->ipv4.unicast[i].address.in_addr;
+		if (iface->config.ip.ipv4->unicast[i].is_used &&
+		    iface->config.ip.ipv4->unicast[i].address.family ==
+								AF_INET &&
+		    iface->config.ip.ipv4->unicast[i].addr_state ==
+							NET_ADDR_PREFERRED) {
+			return
+			    &iface->config.ip.ipv4->unicast[i].address.in_addr;
 		}
 	}
 
@@ -305,7 +307,7 @@ static void setup_ipv6_udp_long(struct net_pkt *pkt,
 		zassert_true(0, "exiting");
 	}
 
-	net_hexdump_frags("frag", pkt);
+	net_hexdump_frags("frag", pkt, false);
 }
 
 static void setup_ipv4_udp(struct net_pkt *pkt,
@@ -502,7 +504,7 @@ static void set_port(sa_family_t family, struct sockaddr *raddr,
 	}
 }
 
-void run_tests(void)
+void test_udp(void)
 {
 	k_thread_priority_set(k_current_get(), K_PRIO_COOP(7));
 
@@ -747,6 +749,6 @@ void run_tests(void)
 void test_main(void)
 {
 	ztest_test_suite(test_udp_fn,
-		ztest_unit_test(run_tests));
+		ztest_unit_test(test_udp));
 	ztest_run_test_suite(test_udp_fn);
 }

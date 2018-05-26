@@ -24,6 +24,44 @@
 
 __weak void _debug_fatal_hook(const NANO_ESF *esf) { ARG_UNUSED(esf); }
 
+#if defined(CONFIG_EXCEPTION_STACK_TRACE)
+struct stack_frame {
+	u32_t next;
+	u32_t ret_addr;
+	u32_t args;
+};
+
+#define MAX_STACK_FRAMES 8
+
+static void unwind_stack(u32_t base_ptr)
+{
+	struct stack_frame *frame;
+	int i;
+
+	if (!base_ptr) {
+		printk("NULL base ptr\n");
+		return;
+	}
+
+	for (i = 0; i < MAX_STACK_FRAMES; i++) {
+		if (base_ptr % sizeof(base_ptr) != 0) {
+			printk("unaligned frame ptr\n");
+			return;
+		}
+
+		frame = (struct stack_frame *)base_ptr;
+		if (!frame || !frame->ret_addr) {
+			break;
+		}
+#ifdef CONFIG_X86_IAMCU
+		printk("     0x%08x\n", frame->ret_addr);
+#else
+		printk("     0x%08x (0x%x)\n", frame->ret_addr, frame->args);
+#endif
+		base_ptr = frame->next;
+	}
+}
+#endif /* CONFIG_EXCEPTION_STACK_TRACE */
 
 /**
  *
@@ -64,12 +102,9 @@ FUNC_NORETURN void _NanoFatalErrorHandler(unsigned int reason,
 		printk("*****\n");
 		break;
 	}
-	case _NANO_ERR_INVALID_TASK_EXIT:
-		printk("***** Invalid Exit Software Error! *****\n");
-		break;
-
 #if defined(CONFIG_STACK_CANARIES) || defined(CONFIG_STACK_SENTINEL) || \
-		defined(CONFIG_X86_STACK_PROTECTION)
+		defined(CONFIG_HW_STACK_PROTECTION) || \
+		defined(CONFIG_USERSPACE)
 	case _NANO_ERR_STACK_CHK_FAIL:
 		printk("***** Stack Check Fail! *****\n");
 		break;
@@ -93,24 +128,47 @@ FUNC_NORETURN void _NanoFatalErrorHandler(unsigned int reason,
 	}
 
 	printk("Current thread ID = %p\n"
-	       "Faulting segment:address = 0x%04x:0x%08x\n"
 	       "eax: 0x%08x, ebx: 0x%08x, ecx: 0x%08x, edx: 0x%08x\n"
 	       "esi: 0x%08x, edi: 0x%08x, ebp: 0x%08x, esp: 0x%08x\n"
-	       "eflags: 0x%x\n",
+	       "eflags: 0x%08x cs: 0x%04x\n"
+#ifdef CONFIG_EXCEPTION_STACK_TRACE
+	       "call trace:\n"
+#endif
+	       "eip: 0x%08x\n",
 	       k_current_get(),
-	       pEsf->cs & 0xFFFF, pEsf->eip,
 	       pEsf->eax, pEsf->ebx, pEsf->ecx, pEsf->edx,
 	       pEsf->esi, pEsf->edi, pEsf->ebp, pEsf->esp,
-	       pEsf->eflags);
+	       pEsf->eflags, pEsf->cs & 0xFFFF, pEsf->eip);
+#ifdef CONFIG_EXCEPTION_STACK_TRACE
+	unwind_stack(pEsf->ebp);
+#endif
+
 #endif /* CONFIG_PRINTK */
 
 
 	/*
-	 * Error was fatal to a kernel task or a fiber; invoke the system
+	 * Error was fatal to a kernel task or a thread; invoke the system
 	 * fatal error handling policy defined for the platform.
 	 */
 
 	_SysFatalErrorHandler(reason, pEsf);
+}
+
+FUNC_NORETURN void _arch_syscall_oops(void *ssf_ptr)
+{
+	struct _x86_syscall_stack_frame *ssf =
+		(struct _x86_syscall_stack_frame *)ssf_ptr;
+	NANO_ESF oops_esf = {
+		.eip = ssf->eip,
+		.cs = ssf->cs,
+		.eflags = ssf->eflags
+	};
+
+	if (oops_esf.cs == USER_CODE_SEG) {
+		oops_esf.esp = ssf->esp;
+	}
+
+	_NanoFatalErrorHandler(_NANO_ERR_KERNEL_OOPS, &oops_esf);
 }
 
 #ifdef CONFIG_X86_KERNEL_OOPS
@@ -157,7 +215,12 @@ const NANO_ESF _default_esf = {
 static FUNC_NORETURN void generic_exc_handle(unsigned int vector,
 					     const NANO_ESF *pEsf)
 {
-	printk("***** CPU exception %d\n", vector);
+	printk("***** ");
+	if (vector == 13) {
+		printk("General Protection Fault\n");
+	} else {
+		printk("CPU exception %d\n", vector);
+	}
 	if ((1 << vector) & _EXC_ERROR_CODE_FAULTS) {
 		printk("***** Exception code: 0x%x\n", pEsf->errorCode);
 	}
@@ -193,7 +256,7 @@ EXC_FUNC_NOCODE(IV_OVERFLOW);
 EXC_FUNC_NOCODE(IV_BOUND_RANGE);
 EXC_FUNC_NOCODE(IV_INVALID_OPCODE);
 EXC_FUNC_NOCODE(IV_DEVICE_NOT_AVAILABLE);
-#ifndef CONFIG_X86_STACK_PROTECTION
+#ifndef CONFIG_X86_ENABLE_TSS
 EXC_FUNC_NOCODE(IV_DOUBLE_FAULT);
 #endif
 EXC_FUNC_CODE(IV_INVALID_TSS);
@@ -214,17 +277,33 @@ EXC_FUNC_NOCODE(IV_MACHINE_CHECK);
 #define SGX	BIT(15)
 
 #ifdef CONFIG_X86_MMU
-static void dump_entry_flags(u32_t flags)
+static void dump_entry_flags(x86_page_entry_data_t flags)
 {
-	printk("0x%03x %s %s %s\n", flags,
-	       flags & MMU_ENTRY_PRESENT ? "Present" : "Non-present",
-	       flags & MMU_ENTRY_WRITE ? "Writable" : "Read-only",
-	       flags & MMU_ENTRY_USER ? "User" : "Supervisor");
+#ifdef CONFIG_X86_PAE_MODE
+	printk("0x%x%x %s, %s, %s, %s\n", (u32_t)(flags>>32),
+	       (u32_t)(flags),
+	       flags & (x86_page_entry_data_t)MMU_ENTRY_PRESENT ?
+	       "Present" : "Non-present",
+	       flags & (x86_page_entry_data_t)MMU_ENTRY_WRITE ?
+	       "Writable" : "Read-only",
+	       flags & (x86_page_entry_data_t)MMU_ENTRY_USER ?
+	       "User" : "Supervisor",
+	       flags & (x86_page_entry_data_t)MMU_ENTRY_EXECUTE_DISABLE ?
+	       "Execute Disable" : "Execute Enabled");
+#else
+	printk("0x%03x %s, %s, %s\n", flags,
+	       flags & (x86_page_entry_data_t)MMU_ENTRY_PRESENT ?
+	       "Present" : "Non-present",
+	       flags & (x86_page_entry_data_t)MMU_ENTRY_WRITE ?
+	       "Writable" : "Read-only",
+	       flags & (x86_page_entry_data_t)MMU_ENTRY_USER ?
+	       "User" : "Supervisor");
+#endif
 }
 
 static void dump_mmu_flags(void *addr)
 {
-	u32_t pde_flags, pte_flags;
+	x86_page_entry_data_t pde_flags, pte_flags;
 
 	_x86_mmu_get_flags(addr, &pde_flags, &pte_flags);
 
@@ -260,7 +339,7 @@ FUNC_NORETURN void page_fault_handler(const NANO_ESF *pEsf)
 _EXCEPTION_CONNECT_CODE(page_fault_handler, IV_PAGE_FAULT);
 #endif /* CONFIG_EXCEPTION_DEBUG */
 
-#ifdef CONFIG_X86_STACK_PROTECTION
+#ifdef CONFIG_X86_ENABLE_TSS
 static __noinit volatile NANO_ESF _df_esf;
 
 /* Very tiny stack; just enough for the bogus error code pushed by the CPU
@@ -283,17 +362,19 @@ struct task_state_segment _df_tss = {
 	.cs = CODE_SEG,
 	.ds = DATA_SEG,
 	.es = DATA_SEG,
-	.fs = DATA_SEG,
-	.gs = DATA_SEG,
 	.ss = DATA_SEG,
 	.eip = (u32_t)_df_handler_top,
+#ifdef CONFIG_X86_PAE_MODE
+	.cr3 = (u32_t)X86_MMU_PDPT
+#else
 	.cr3 = (u32_t)X86_MMU_PD
+#endif
 };
 
 static FUNC_NORETURN __used void _df_handler_bottom(void)
 {
 	/* We're back in the main hardware task on the interrupt stack */
-	u32_t pte_flags, pde_flags;
+	x86_page_entry_data_t pte_flags, pde_flags;
 	int reason;
 
 	/* Restore the top half so it is runnable again */
@@ -335,16 +416,18 @@ static FUNC_NORETURN __used void _df_handler_top(void)
 	_df_esf.eflags = _main_tss.eflags;
 
 	/* Restore the main IA task to a runnable state */
-	_main_tss.esp = (u32_t)(K_THREAD_STACK_BUFFER(_interrupt_stack) +
+	_main_tss.esp = (u32_t)(_ARCH_THREAD_STACK_BUFFER(_interrupt_stack) +
 				CONFIG_ISR_STACK_SIZE);
 	_main_tss.cs = CODE_SEG;
 	_main_tss.ds = DATA_SEG;
 	_main_tss.es = DATA_SEG;
-	_main_tss.fs = DATA_SEG;
-	_main_tss.gs = DATA_SEG;
 	_main_tss.ss = DATA_SEG;
 	_main_tss.eip = (u32_t)_df_handler_bottom;
+#ifdef CONFIG_X86_PAE_MODE
+	_main_tss.cr3 = (u32_t)X86_MMU_PDPT;
+#else
 	_main_tss.cr3 = (u32_t)X86_MMU_PD;
+#endif
 
 	/* NT bit is set in EFLAGS so we will task switch back to _main_tss
 	 * and run _df_handler_bottom
@@ -358,4 +441,4 @@ static FUNC_NORETURN __used void _df_handler_top(void)
  */
 _X86_IDT_TSS_REGISTER(DF_TSS, -1, -1, IV_DOUBLE_FAULT, 0);
 
-#endif /* CONFIG_X86_STACK_PROTECTION */
+#endif /* CONFIG_X86_ENABLE_TSS */

@@ -9,7 +9,7 @@
  *
  * Based on reference manual:
  *   STM32F303xB/C/D/E, STM32F303x6/8, STM32F328x8, STM32F358xC,
- *   STM32F398xE advanced ARM ® -based MCUs
+ *   STM32F398xE advanced ARM(r)-based MCUs
  *
  * Chapter 14.1.3: Interrupt and exception vectors
  */
@@ -19,7 +19,7 @@
 #define _STM32F3_SOC_IRQ_H_
 
 /* FIXME: Remove when use of enum line number in IRQ_CONNECT is
- * made possible by ZEP-1165.
+ * made possible by GH-2657.
  * soc_irq.h, once it is possible, should be removed. */
 
 #define STM32F3_IRQ_WWDG		0

@@ -12,11 +12,14 @@
 #include <misc/printk.h>
 
 /* change this to use another GPIO port */
+#ifndef SW0_GPIO_CONTROLLER
 #ifdef SW0_GPIO_NAME
-#define PORT	SW0_GPIO_NAME
+#define SW0_GPIO_CONTROLLER SW0_GPIO_NAME
 #else
-#error SW0_GPIO_NAME needs to be set in board.h
+#error SW0_GPIO_NAME or SW0_GPIO_CONTROLLER needs to be set in board.h
 #endif
+#endif
+#define PORT	SW0_GPIO_CONTROLLER
 
 /* change this to use another GPIO pin */
 #ifdef SW0_GPIO_PIN
@@ -37,7 +40,11 @@
 #endif
 
 /* change this to enable pull-up/pull-down */
+#ifdef SW0_GPIO_PIN_PUD
+#define PULL_UP SW0_GPIO_PIN_PUD
+#else
 #define PULL_UP 0
+#endif
 
 /* Sleep time */
 #define SLEEP_TIME	500

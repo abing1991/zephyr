@@ -19,12 +19,13 @@
 #include <net/net_core.h>
 #include <net/net_pkt.h>
 #include <net/udp.h>
+#include <net/tcp.h>
 
 #include "net_private.h"
 #include "icmpv6.h"
 #include "icmpv4.h"
 #include "udp_internal.h"
-#include "tcp.h"
+#include "tcp_internal.h"
 #include "connection.h"
 #include "net_stats.h"
 
@@ -776,6 +777,32 @@ static inline void send_icmp_error(struct net_pkt *pkt)
 	}
 }
 
+static bool is_invalid_packet(struct net_pkt *pkt,
+			       u16_t src_port,
+			       u16_t dst_port)
+{
+	bool my_src_addr = false;
+
+	switch (NET_IPV6_HDR(pkt)->vtc & 0xf0) {
+#if defined(CONFIG_NET_IPV6)
+	case 0x60:
+		if (net_is_my_ipv6_addr(&NET_IPV6_HDR(pkt)->src)) {
+			my_src_addr = true;
+		}
+		break;
+#endif
+#if defined(CONFIG_NET_IPV4)
+	case 0x40:
+		if (net_is_my_ipv4_addr(&NET_IPV4_HDR(pkt)->src)) {
+			my_src_addr = true;
+		}
+		break;
+#endif
+	}
+
+	return my_src_addr && (src_port == dst_port);
+}
+
 enum net_verdict net_conn_input(enum net_ip_protocol proto, struct net_pkt *pkt)
 {
 	int i, best_match = -1;
@@ -829,12 +856,30 @@ enum net_verdict net_conn_input(enum net_ip_protocol proto, struct net_pkt *pkt)
 		return NET_DROP;
 	}
 
+	if (is_invalid_packet(pkt, src_port, dst_port)) {
+		NET_DBG("Dropping invalid packet");
+		return NET_DROP;
+	}
+
 	if (IS_ENABLED(CONFIG_NET_DEBUG_CONN)) {
+		int data_len = -1;
+
+		if (IS_ENABLED(CONFIG_NET_IPV4) &&
+		    net_pkt_family(pkt) == AF_INET) {
+			data_len = NET_IPV4_HDR(pkt)->len[0] * 256 +
+				NET_IPV4_HDR(pkt)->len[1];
+		} else if (IS_ENABLED(CONFIG_NET_IPV6) &&
+			   net_pkt_family(pkt) == AF_INET6) {
+			data_len = NET_IPV6_HDR(pkt)->len[0] * 256 +
+				NET_IPV6_HDR(pkt)->len[1];
+		}
+
 		NET_DBG("Check %s listener for pkt %p src port %u dst port %u "
-			"family %d chksum 0x%04x", net_proto2str(proto), pkt,
+			"family %d chksum 0x%04x len %d", net_proto2str(proto),
+			pkt,
 			ntohs(src_port),
 			ntohs(dst_port),
-			net_pkt_family(pkt), ntohs(chksum));
+			net_pkt_family(pkt), ntohs(chksum), data_len);
 	}
 
 	for (i = 0; i < CONFIG_NET_MAX_CONN; i++) {
@@ -894,26 +939,35 @@ enum net_verdict net_conn_input(enum net_ip_protocol proto, struct net_pkt *pkt)
 		 * If the checksum calculation fails, then discard the message.
 		 */
 		if (IS_ENABLED(CONFIG_NET_UDP_CHECKSUM) &&
-		    proto == IPPROTO_UDP) {
+		    proto == IPPROTO_UDP &&
+		    net_if_need_calc_rx_checksum(net_pkt_iface(pkt))) {
 			u16_t chksum_calc;
 
 			net_udp_set_chksum(pkt, pkt->frags);
 			chksum_calc = net_udp_get_chksum(pkt, pkt->frags);
 
 			if (chksum != chksum_calc) {
-				net_stats_update_udp_chkerr();
+				net_stats_update_udp_chkerr(net_pkt_iface(pkt));
+				NET_DBG("UDP checksum mismatch "
+					"expected 0x%04x got 0x%04x, dropping packet.",
+					ntohs(chksum_calc), ntohs(chksum));
 				goto drop;
 			}
 
 		} else if (IS_ENABLED(CONFIG_NET_TCP_CHECKSUM) &&
-			   proto == IPPROTO_TCP) {
+			   proto == IPPROTO_TCP &&
+			   net_if_need_calc_rx_checksum(net_pkt_iface(pkt))) {
 			u16_t chksum_calc;
 
 			net_tcp_set_chksum(pkt, pkt->frags);
 			chksum_calc = net_tcp_get_chksum(pkt, pkt->frags);
 
 			if (chksum != chksum_calc) {
-				net_stats_update_tcp_seg_chkerr();
+				net_stats_update_tcp_seg_chkerr(
+							net_pkt_iface(pkt));
+				NET_DBG("TCP checksum mismatch "
+					"expected 0x%04x got 0x%04x, dropping packet.",
+					ntohs(chksum_calc), ntohs(chksum));
 				goto drop;
 			}
 		}
@@ -942,7 +996,7 @@ enum net_verdict net_conn_input(enum net_ip_protocol proto, struct net_pkt *pkt)
 			goto drop;
 		}
 
-		net_stats_update_per_proto_recv(proto);
+		net_stats_update_per_proto_recv(net_pkt_iface(pkt), proto);
 
 		return NET_OK;
 	}
@@ -970,12 +1024,12 @@ enum net_verdict net_conn_input(enum net_ip_protocol proto, struct net_pkt *pkt)
 		send_icmp_error(pkt);
 
 		if (IS_ENABLED(CONFIG_NET_TCP) && proto == IPPROTO_TCP) {
-			net_stats_update_tcp_seg_connrst();
+			net_stats_update_tcp_seg_connrst(net_pkt_iface(pkt));
 		}
 	}
 
 drop:
-	net_stats_update_per_proto_drop(proto);
+	net_stats_update_per_proto_drop(net_pkt_iface(pkt), proto);
 
 	return NET_DROP;
 }

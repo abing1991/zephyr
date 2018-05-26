@@ -3,20 +3,19 @@ Zephyr Sanity Tests
 ###################
 
 This script scans for the set of unit test applications in the git repository
-and attempts to execute them. By default, it tries to build each test case
-boards set to be default in the board definition file.
+and attempts to execute them. By default, it tries to build each test
+case on boards marked as default in the board definition file.
 
-The default options will build the  majority of the tests on a defined set of
-boards and will run in emulated environments (QEMU) if available for the
+The default options will build the majority of the tests on a defined set of
+boards and will run in an emulated environment (QEMU) if available for the
 architecture or configuration being tested.
 
-In general, the sanitycheck is used to verify that local changes did not break
-anything in the tree and would run basic kernel tests inside QEMU. Sanitycheck
-does guarantee that everything would work in the final environment and has
-limited coverage (test execution), however, the script builds samples and tests
-for different boards using different configurations and helps keeping the code
-buildable at all times.
-
+In normal use, sanitycheck runs a limited set of kernel tests (inside
+QEMU).  Because of its limited text execution coverage, sanitycheck
+cannot guarantee local changes will succeed in the full build
+environment, but it does sufficient testing by building samples and
+tests for different boards and different configurations to help keep the
+full code tree buildable.
 
 To run the script in the local tree, follow the steps below:
 
@@ -25,32 +24,25 @@ To run the script in the local tree, follow the steps below:
         $ source zephyr-env.sh
         $ ./scripts/sanitycheck
 
-If you have a system with a large number of cores, you can try and build/run all
-possible tests using the following options:
+If you have a system with a large number of cores, you can build and run
+all possible tests using the following options:
 
 ::
 
         $ ./scripts/sanitycheck --all --enable-slow
 
-This will build for all available boards and would run all possible tests in
-a simulated environment if applicable.
+This will build for all available boards and run all applicable tests in
+a simulated (QEMU) environment.
 
 The sanitycheck script accepts the following optional arguments:
 
-  -h, --help
-                        show this help message and exit
+  -h, --help            show this help message and exit
   -p PLATFORM, --platform PLATFORM
                         Platform filter for testing. This option may be used
                         multiple times. Testcases will only be built/run on
                         the platforms specified. If this option is not used,
                         then platforms marked as default in the platform
                         metadata file will be chosen to build and test.
-  -L N, --platform-limit N
-                        Controls what platforms are tested if --platform or
-                        --all are not used. For each architecture specified by
-                        --arch (defaults to all of them), choose the first N
-                        platforms to test in the arch-specific .yaml file
-                        'platforms' list. Defaults to 1.
   -a ARCH, --arch ARCH  Arch filter for testing. Takes precedence over
                         --platform. If unspecified, test all arches. Multiple
                         invocations are treated as a logical 'or' relationship
@@ -85,15 +77,20 @@ The sanitycheck script accepts the following optional arguments:
                         skipped and why
   --compare-report COMPARE_REPORT
                         Use this report file for size comparison
-  --ccache              Enable the use of ccache when building
   -B SUBSET, --subset SUBSET
                         Only run a subset of the tests, 1/4 for running the
                         first 25%, 3/5 means run the 3rd fifth of the total.
                         This option is useful when running a large number of
                         tests on different hosts to speed up execution time.
+  -N, --ninja           Use the Ninja generator with CMake
   -y, --dry-run         Create the filtered list of test cases, but don't
                         actually run them. Useful if you're just interested in
                         --discard-report
+  --list-tags           list all tags in selected tests
+  --list-tests          list all tests.
+  --detailed-report FILENAME
+                        Generate a junit report with detailed testcase
+                        results.
   -r, --release         Update the benchmark database with the results of this
                         test run. Intended to be run by CI when tagging an
                         official release. This database is used as a basis for
@@ -111,9 +108,20 @@ The sanitycheck script accepts the following optional arguments:
                         invocation
   -u, --no-update       do not update the results of the last run of the
                         sanity checks
+  -F FILENAME, --load-tests FILENAME
+                        Load list of tests to be run from file.
+  -E FILENAME, --save-tests FILENAME
+                        Save list of tests to be run to file.
   -b, --build-only      Only build the code, do not execute any of it in QEMU
   -j JOBS, --jobs JOBS  Number of cores to use when building, defaults to
                         number of CPUs * 2
+  --device-testing      Test on device directly. Specify the serial device to
+                        use with the --device-serial option.
+  --device-serial DEVICE_SERIAL
+                        Serial device for accessing the board (e.g.,
+                        /dev/ttyACM0)
+  --show-footprint      Show footprint statistics and deltas since last
+                        release.
   -H FOOTPRINT_THRESHOLD, --footprint-threshold FOOTPRINT_THRESHOLD
                         When checking test case footprint sizes, warn the user
                         if the new app size is greater then the specified
@@ -122,7 +130,8 @@ The sanitycheck script accepts the following optional arguments:
   -D, --all-deltas      Show all footprint deltas, positive or negative.
                         Implies --footprint-threshold=0
   -O OUTDIR, --outdir OUTDIR
-                        Output directory for logs and binaries.
+                        Output directory for logs and binaries. This directory
+                        will be deleted unless '--no-clean' is set.
   -n, --no-clean        Do not delete the outdir before building. Will result
                         in faster compilation since builds will be incremental
   -T TESTCASE_ROOT, --testcase-root TESTCASE_ROOT
@@ -130,8 +139,8 @@ The sanitycheck script accepts the following optional arguments:
                         All testcase.yaml files under here will be processed.
                         May be called multiple times. Defaults to the
                         'samples' and 'tests' directories in the Zephyr tree.
-  -A ARCH_ROOT, --arch-root ARCH_ROOT
-                        Directory to search for arch configuration files. All
+  -A BOARD_ROOT, --board-root BOARD_ROOT
+                        Directory to search for board configuration files. All
                         .yaml files in the directory will be processed.
   -z SIZE, --size SIZE  Don't run sanity checks. Instead, produce a report to
                         stdout detailing RAM/ROM sizes on the specified
@@ -139,14 +148,20 @@ The sanitycheck script accepts the following optional arguments:
   -S, --enable-slow     Execute time-consuming test cases that have been
                         marked as 'slow' in testcase.yaml. Normally these are
                         only built.
-  -R, --enable-asserts  Build all test cases with assertions enabled.
+  -R, --enable-asserts  Build all test cases with assertions enabled. (This is
+                        the default)
+  --disable-asserts     Build all test cases with assertions disabled.
   -Q, --error-on-deprecations
                         Error on deprecation warnings.
   -x EXTRA_ARGS, --extra-args EXTRA_ARGS
-                        Extra arguments to pass to the build when compiling
-                        test cases. May be called multiple times. These will
-                        be passed in after any sanitycheck-supplied options.
-  -C, --coverage        Scan for unit test coverage with gcov + lcov.
+                        Extra CMake cache entries to define when building test
+                        cases. May be called multiple times. The key-value
+                        entries will be prefixed with -D before being passed
+                        to CMake. E.g "sanitycheck -x=USE_CCACHE=0" will
+                        translate to "cmake -DUSE_CCACHE=0" which will
+                        ultimately disable ccache.
+  -C, --coverage        Generate coverage report for unit tests, and tests and
+                        samples run in native_posix.
 
 
 Board Configuration
@@ -164,27 +179,27 @@ required for best test coverage for this specific board:
 
 .. code-block:: yaml
 
-	identifier: quark_d2000_crb
-	name: Quark D2000 Devboard
-	type: mcu
-	arch: x86
-	toolchain:
-	  - zephyr
-	  - issm
-	ram: 8
-	flash: 32
-	testing:
-                default: true
-		ignore_tags:
-		  - net
-		  - bluetooth
+        identifier: quark_d2000_crb
+        name: Quark D2000 Devboard
+        type: mcu
+        arch: x86
+        toolchain:
+          - zephyr
+          - issm
+        ram: 8
+        flash: 32
+        testing:
+          default: true
+          ignore_tags:
+            - net
+            - bluetooth
 
 
 identifier:
   A string that matches how the board is defined in the build system. This same
-  string is used when building, for example when calling 'make'::
+  string is used when building, for example when calling 'cmake'::
 
-  # make BOARD=quark_d2000_crb
+  # cmake -DBOARD=quark_d2000_crb ..
 
 name:
   The actual name of the board as it appears in marketing material.
@@ -194,7 +209,7 @@ arch:
   Architecture of the board
 toolchain:
   The list of supported toolchains that can build this board. This should match
-  one of the values used for 'ZEPHYR_GCC_VARIANT' when building on the command line
+  one of the values used for 'ZEPHYR_TOOLCHAIN_VARIANT' when building on the command line
 ram:
   Available RAM on the board (specified in KB). This is used to match testcase
   requirements.  If not specified we default to 128KB.
@@ -234,9 +249,6 @@ testing:
     Do not attempt to build (and therefore run) tests marked with this list of
     tags.
 
-
-
-
 Test Cases
 **********
 
@@ -246,25 +258,25 @@ entries in the test section each identifying a test scenario. The name of
 the test case only needs to be unique for the test cases specified in
 that testcase meta-data.
 
-Test cases are written suing the YAML syntax and share the same structure as
+Test cases are written using the YAML syntax and share the same structure as
 samples. The following is an example test with a few options that are
 explained in this document.
 
 
 ::
 
-	tests:
-	-   test:
-		build_only: true
-		platform_whitelist: qemu_cortex_m3 qemu_x86 arduino_101
-		tags: bluetooth
-	-   test_br:
-		build_only: true
-		extra_args: CONF_FILE="prj_br.conf"
-		filter: not CONFIG_DEBUG
-		platform_exclude: quark_d2000_crb
-		platform_whitelist: qemu_cortex_m3 qemu_x86
-		tags: bluetooth
+        tests:
+          test:
+            build_only: true
+            platform_whitelist: qemu_cortex_m3 qemu_x86 arduino_101
+            tags: bluetooth
+          test_br:
+            build_only: true
+            extra_args: CONF_FILE="prj_br.conf"
+            filter: not CONFIG_DEBUG
+            platform_exclude: quark_d2000_crb
+            platform_whitelist: qemu_cortex_m3 qemu_x86
+            tags: bluetooth
 
 
 A sample with tests will have the same structure with additional information
@@ -272,21 +284,21 @@ related to the sample and what is being demonstrated:
 
 ::
 
-	sample:
-	  name: hello world
-	  description: Hello World sample, the simplest Zephyr application
-	  platforms: all
-	tests:
-	    - test:
-		build_only: true
-		tags: samples tests
-		min_ram: 16
-	    - singlethread:
-		build_only: true
-		extra_args: CONF_FILE=prj_single.conf
-		filter: not CONFIG_BT and not CONFIG_GPIO_SCH
-		tags: samples tests
-		min_ram: 16
+        sample:
+          name: hello world
+          description: Hello World sample, the simplest Zephyr application
+          platforms: all
+        tests:
+          test:
+            build_only: true
+            tags: samples tests
+            min_ram: 16
+          singlethread:
+            build_only: true
+            extra_args: CONF_FILE=prj_single.conf
+            filter: not CONFIG_BT and not CONFIG_GPIO_SCH
+            tags: samples tests
+            min_ram: 16
 
 The full canonical name for each test case is:
 
@@ -314,6 +326,22 @@ slow: <True|False> (default False)
 extra_args: <list of extra arguments>
     Extra arguments to pass to Make when building or running the
     test case.
+
+extra_configs: <list of extra configurations>
+    Extra configuration options to be merged with a master prj.conf
+    when building or running the test case. For example::
+
+        common:
+          tags: drivers adc
+        tests:
+          test:
+            depends_on: adc
+          test_resolution_6:
+            extra_configs:
+              - CONFIG_ADC_QMSI_SAMPLE_WIDTH=6
+            platform_whitelist: quark_se_c1000_ss_devboard
+            tags: hwtest
+
 
 build_only: <True|False> (default False)
     If true, don't try to run the test under QEMU even if the
@@ -433,3 +461,25 @@ To load arguments from a file, write '+' before the file name, e.g.,
 line break instead of white spaces.
 
 Most everyday users will run with no arguments.
+
+
+Running Tests on Hardware
+*************************
+
+Beside being able to run tests in QEMU and other simulated environments,
+sanitycheck supports running most of the tests on real devices and produces
+reports for each run with detailed FAIL/PASS results.
+
+To use this feature, run sanitycheck with the following new options::
+
+	scripts/sanitycheck --device-testing --device-serial /dev/ttyACM0 -p \
+	frdm_k64f  -T tests/kernel
+
+The ``--device-serial`` option denotes the serial device the board is connected to.
+This needs to be accessible by the user running sanitycheck. You can run this on
+only one board at a time, specified using the
+``--platform`` option.
+
+To produce test reports, use the ``--detailed-report FILENAME`` option which will
+generate an XML file using the JUNIT syntax. This file can be used to generate
+other reports, for example using ``junit2html`` which can be installed via PIP.
